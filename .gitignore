@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# uv / venv
+.venv/
+
+# local secrets / audit artifacts
+*.jsonl
+.env
+audit_out/          # parser_audit.py output: raw nxc stdout incl. real NTDS/LSA/gMSA secrets
+tests/*
+.mcp.json
+PLAN.md
+runtest.txt
+audit_out/*
+docs/*
+scripts/*
+.python-version
