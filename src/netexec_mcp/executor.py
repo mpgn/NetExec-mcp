@@ -126,7 +126,13 @@ def run(argv: list[str], timeout: int) -> CommandResult:
 
     Raises FileNotFoundError if the executable itself is missing.
     """
-    proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+    # stdin=DEVNULL: never let the child inherit the parent's stdin. Under the
+    # stdio MCP transport that stdin is the JSON-RPC pipe; on Windows an inherited
+    # pipe handle makes `nxc --version` hang until the timeout (observed: 300s).
+    # The MCP always passes targets/creds via argv, so nxc never needs stdin.
+    proc = subprocess.run(
+        argv, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL
+    )
     return CommandResult(
         argv=list(argv),
         returncode=proc.returncode,
@@ -145,6 +151,8 @@ async def run_async(argv: list[str], timeout: int, env: dict | None = None) -> C
     """
     proc = await asyncio.create_subprocess_exec(
         *argv,
+        # See run(): don't inherit the MCP's JSON-RPC stdin pipe (hangs nxc on Windows).
+        stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env=None if env is None else {**os.environ, **env},
