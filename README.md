@@ -8,8 +8,7 @@ It is a **pure subprocess wrapper**: it shells out to the `nxc` CLI as an argv l
 (never `shell=True`, never importing NetExec as a library) and declares **no** nxc
 dependency. How nxc itself is installed (PATH / uv / pipx / docker) is entirely up to you.
 
-> ⚠️ **For authorized testing only.** This tool drives an offensive security
-> framework. Use it solely against systems you are explicitly permitted to test.
+<img width="1417" height="581" alt="image" src="https://github.com/user-attachments/assets/8c72cd0d-77bf-4ccf-a553-7c5ccce55513" />
 
 ## Status
 
