@@ -92,7 +92,7 @@ Four escalating levels of how much the server is allowed to *do*:
 | Mode | What runs | Use when |
 | --- | --- | --- |
 | `suggest` | **Nothing executes.** Tools return the resolved nxc command for a human (the auditor) to run. Scope still enforced; offensive commands *can* be previewed. | You want the agent to plan commands you run yourself. |
-| `recon` _(default)_ | Read-only enumeration executes; credential-dumping and state-changing actions are refused. | Day-to-day authorized recon. |
+| `recon` _(default)_ | Read-only enumeration; executes, credential-dumping and state-changing actions are refused. | Day-to-day authorized recon. |
 | `loot` | Recon **plus** read-only credential-dumping (sam/lsa/ntds/gpp/roasting) — no state change on the target, but it harvests credential material. | Authorized credential-harvesting. |
 | `full` | Everything executes, including state-changing / privilege-escalation actions (exec, write, spray, coercion-with-listener, exploits). | Authorized active testing. |
 
