@@ -23,12 +23,12 @@ everything; the long tail of nxc `-M` modules is reachable via meta-tools.
 ## Built for small / local models
 
 With 131 tools, listing every one to the model would spend ~46k tokens of context
-before any work starts — enough to overflow a small-context (≤8B / 32k) model and to
+before any work starts enough to overflow a small-context (≤8B / 32k) model and to
 make every call on a large one needlessly expensive. So the default `NXC_TOOL_MODE`
 is **`dynamic`**: only a handful of meta-tools are exposed (`nxc_catalog`,
 `nxc_find_tool`, `nxc_describe_tool`, `nxc_call`, `nxc_health`), and the model
 discovers and dispatches the real tools on demand. This keeps the tool surface out
-of the context window — required to run on small local models, and cheaper (same
+of the context window required to run on small local models, and cheaper (same
 quality) on large ones. Set `NXC_TOOL_MODE=static` to opt out and list every tool. See
 the `NXC_TOOL_MODE` row under [Configuration](#configuration-env-vars) and the
 step-budget note beneath it.
