@@ -170,7 +170,7 @@ handlers reject.
 This MCP is a subprocess wrapper and pins no nxc dependency, but its tools/flags are
 verified against a specific nxc build:
 
-> **nxc 1.5.1 "Yippie-Ki-Yay", commit `d1fc6d57`** (`d1fc6d57846431991b823952a696177a9ac5a554`, 2026-07-12)
+> **nxc 1.5.1 "Yippie-Ki-Yay", commit `cd599504`** (`cd599504…`, 2026-07-21, build 540)
 
 Check your local build with `nxc --version` (it prints `version - codename - commit - build`).
 nxc moves fast and occasionally moves/removes flags, so when you bump nxc, re-verify the
