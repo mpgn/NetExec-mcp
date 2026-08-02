@@ -51,7 +51,7 @@
 <text x="56.0" y="852.0" font-size="11" fill="#a892d8">agent · reply</text>
 <text x="56.0" y="874.0" xml:space="preserve"><tspan fill="#e6edf3">chained it: svc_backup → LSA → </tspan><tspan fill="#e3b341">7e1c9a2f</tspan><tspan fill="#e6edf3"> → </tspan><tspan fill="#d2a8ff">gmsa-robin$</tspan><tspan fill="#e6edf3"> → code exec on WS01.</tspan></text>
 <text x="56.0" y="896.0" xml:space="preserve">three protocols, one prompt. every call is in the JSONL audit log.</text>
-<text x="34.0" y="922.0" xml:space="preserve"><tspan fill="#d2a8ff">you</tspan> <tspan fill="#6e7681">❯</tspan> <tspan fill="#56d364">█</tspan></text>
+<text x="34.0" y="922.0" xml:space="preserve"><tspan fill="#d2a8ff">you</tspan> <tspan fill="#6e7681">❯</tspan> <tspan fill="#56d364">█<animate attributeName="fill-opacity" values="1;0" keyTimes="0;0.5" calcMode="discrete" dur="1.06s" repeatCount="indefinite"/></tspan></text>
 <line x1="34.0" y1="937.0" x2="838.0" y2="937.0" stroke="#21262d" stroke-width="1"/>
 <text x="34.0" y="952.0" xml:space="preserve"><tspan fill="#6e7681">smb → ldap → smb  ·  one prompt  ·  3 tool calls, fully audited  ·  mode full</tspan></text>
 </g></g>

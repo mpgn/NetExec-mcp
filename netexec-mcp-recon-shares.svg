@@ -29,7 +29,7 @@
 <text x="56.0" y="460.0" xml:space="preserve"><tspan fill="#e6edf3">WS01 (10.0.0.24) — robin is local admin. writable shares: </tspan><tspan fill="#e3b341">C$</tspan><tspan fill="#e6edf3">, </tspan><tspan fill="#e3b341">backups$</tspan><tspan fill="#e6edf3">.</tspan></text>
 <text x="56.0" y="482.0" xml:space="preserve">signing is off there too, so it's relay-viable. want me to map ntlmrelay paths?</text>
 <text x="56.0" y="504.0" xml:space="preserve"><tspan fill="#f85149">refused</tspan><tspan fill="#6e7681"> in recon: smb_exec, smb_sam — raise to </tspan><tspan fill="#e3b341">NXC_MODE=full</tspan><tspan fill="#6e7681"> to run them.</tspan></text>
-<text x="34.0" y="530.0" xml:space="preserve"><tspan fill="#d2a8ff">you</tspan> <tspan fill="#6e7681">❯</tspan> <tspan fill="#56d364">█</tspan></text>
+<text x="34.0" y="530.0" xml:space="preserve"><tspan fill="#d2a8ff">you</tspan> <tspan fill="#6e7681">❯</tspan> <tspan fill="#56d364">█<animate attributeName="fill-opacity" values="1;0" keyTimes="0;0.5" calcMode="discrete" dur="1.06s" repeatCount="indefinite"/></tspan></text>
 <line x1="34.0" y1="545.0" x2="838.0" y2="545.0" stroke="#21262d" stroke-width="1"/>
 <text x="34.0" y="560.0" xml:space="preserve"><tspan fill="#6e7681">mode recon  ·  read-only  ·  offensive actions refused  ·  every call audited</tspan></text>
 </g></g>
