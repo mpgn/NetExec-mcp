@@ -1,6 +1,6 @@
 [project]
 name = "netexec-mcp"
-version = "1.0.1"
+version = "1.0.2"
 description = "MCP server that drives NetExec (nxc) for authorized security testing."
 readme = "README.md"
 requires-python = ">=3.10"
