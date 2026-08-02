@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="872" height="594" viewBox="0 0 872 594" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono',monospace" role="img" aria-label="Terminal session: NetExec-MCP in recon mode enumerating which shares robin can write to, with offensive actions refused by the safety gate.">
+<clipPath id="term"><rect x="16" y="16" width="840.0" height="562.0" rx="10"/></clipPath>
+<rect x="16" y="16" width="840.0" height="562.0" rx="10" fill="#0d1117"/>
+<g clip-path="url(#term)">
+<rect x="16" y="16" width="840.0" height="36" fill="#161b22"/>
+<line x1="16" y1="52" x2="856.0" y2="52" stroke="#21262d" stroke-width="1"/>
+<circle cx="36" cy="34.0" r="5" fill="#f85149"/><circle cx="54" cy="34.0" r="5" fill="#e3b341"/><circle cx="72" cy="34.0" r="5" fill="#56d364"/><text x="90" y="38.0" font-size="11" fill="#8b949e">netexec-mcp — NXC_MODE=<tspan fill="#39c5cf">recon</tspan></text>
+<g font-size="13" fill="#c9d1d9">
+<text x="34.0" y="82.0" xml:space="preserve"><tspan fill="#d2a8ff">you</tspan> <tspan fill="#6e7681">❯</tspan> <tspan fill="#e6edf3">which boxes in scope let robin write to a share?</tspan></text>
+<line x1="41.0" y1="96.0" x2="41.0" y2="139.0" stroke="#6e56a8" stroke-width="2" stroke-dasharray="4 3"/>
+<text x="56.0" y="110.0" font-size="11" fill="#8b7cc4">agent thinking</text>
+<text x="56.0" y="132.0" xml:space="preserve">that's read-only share enumeration — smb_shares, safe to run in recon.</text>
+<rect x="40.0" y="150.0" width="798.0" height="263.0" fill="#12151c"/>
+<rect x="40.0" y="150.0" width="2" height="263.0" fill="#8957e5"/>
+<rect x="54.0" y="152.0" width="137.4" height="16" rx="4" fill="#21262d" stroke="#30363d" stroke-width="1"/>
+<text x="61.0" y="165.0" font-size="11" fill="#d2a8ff">nxc-mcp · tool call</text>
+<text x="56.0" y="186.0" xml:space="preserve"><tspan fill="#6e7681">find   nxc_find_tool("smb share permissions")  →  smb_shares</tspan></text>
+<text x="56.0" y="208.0" xml:space="preserve"><tspan fill="#6e7681">gate   scope 10.0.0.0/24 </tspan><tspan fill="#56d364">ok</tspan><tspan fill="#6e7681">   mode recon </tspan><tspan fill="#56d364">ok</tspan><tspan fill="#6e7681">   argv no-shell </tspan><tspan fill="#56d364">ok</tspan><tspan fill="#6e7681">   audit </tspan><tspan fill="#e3b341">logged</tspan></text>
+<text x="56.0" y="230.0" xml:space="preserve"><tspan fill="#d2a8ff">spawn</tspan><tspan fill="#e6edf3">  nxc smb 10.0.0.0/24 -u robin -p '•••••••' --shares</tspan></text>
+<text x="56.0" y="274.0" xml:space="preserve"><tspan fill="#58a6ff">SMB</tspan>   10.0.0.12   445  DC01   <tspan fill="#58a6ff">[*]</tspan> Windows Server 2022 Build 20348 <tspan fill="#6e7681">(signing:True)</tspan></text>
+<text x="56.0" y="296.0" xml:space="preserve"><tspan fill="#58a6ff">SMB</tspan>   10.0.0.24   445  WS01   <tspan fill="#58a6ff">[*]</tspan> Windows 10 Build 19041 <tspan fill="#6e7681">(signing:False)</tspan></text>
+<text x="56.0" y="318.0" xml:space="preserve"><tspan fill="#58a6ff">SMB</tspan>   10.0.0.12   445  DC01   <tspan fill="#56d364">[+]</tspan> corp.local\robin:•••••••</text>
+<text x="56.0" y="340.0" xml:space="preserve"><tspan fill="#58a6ff">SMB</tspan>   10.0.0.24   445  WS01   <tspan fill="#56d364">[+]</tspan> corp.local\robin:••••••• <tspan fill="#d2a8ff">(Pwn3d!)</tspan></text>
+<text x="56.0" y="362.0" xml:space="preserve"><tspan fill="#58a6ff">SMB</tspan>   10.0.0.24   445  WS01   <tspan fill="#56d364">[+]</tspan> C$        <tspan fill="#e3b341">READ,WRITE</tspan></text>
+<text x="56.0" y="384.0" xml:space="preserve"><tspan fill="#58a6ff">SMB</tspan>   10.0.0.24   445  WS01   <tspan fill="#56d364">[+]</tspan> backups$  <tspan fill="#e3b341">READ,WRITE</tspan></text>
+<text x="56.0" y="406.0" xml:space="preserve"><tspan fill="#6e7681">exit   0 · 2 hosts · 1.9s</tspan></text>
+<line x1="41.0" y1="424.0" x2="41.0" y2="511.0" stroke="#6e56a8" stroke-width="2" stroke-dasharray="4 3"/>
+<text x="56.0" y="438.0" font-size="11" fill="#a892d8">agent · reply</text>
+<text x="56.0" y="460.0" xml:space="preserve"><tspan fill="#e6edf3">WS01 (10.0.0.24) — robin is local admin. writable shares: </tspan><tspan fill="#e3b341">C$</tspan><tspan fill="#e6edf3">, </tspan><tspan fill="#e3b341">backups$</tspan><tspan fill="#e6edf3">.</tspan></text>
+<text x="56.0" y="482.0" xml:space="preserve">signing is off there too, so it's relay-viable. want me to map ntlmrelay paths?</text>
+<text x="56.0" y="504.0" xml:space="preserve"><tspan fill="#f85149">refused</tspan><tspan fill="#6e7681"> in recon: smb_exec, smb_sam — raise to </tspan><tspan fill="#e3b341">NXC_MODE=full</tspan><tspan fill="#6e7681"> to run them.</tspan></text>
+<text x="34.0" y="530.0" xml:space="preserve"><tspan fill="#d2a8ff">you</tspan> <tspan fill="#6e7681">❯</tspan> <tspan fill="#56d364">█</tspan></text>
+<line x1="34.0" y1="545.0" x2="838.0" y2="545.0" stroke="#21262d" stroke-width="1"/>
+<text x="34.0" y="560.0" xml:space="preserve"><tspan fill="#6e7681">mode recon  ·  read-only  ·  offensive actions refused  ·  every call audited</tspan></text>
+</g></g>
+<rect x="16" y="16" width="840.0" height="562.0" rx="10" fill="none" stroke="#30363d" stroke-width="1"/>
+</svg>
