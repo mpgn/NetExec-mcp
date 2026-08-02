@@ -8,8 +8,14 @@ It is a **pure subprocess wrapper**: it shells out to the `nxc` CLI as an argv l
 (never `shell=True`, never importing NetExec as a library) and declares **no** nxc
 dependency. How nxc itself is installed (PATH / uv / pipx / docker) is entirely up to you.
 
-<img width="1417" height="581" alt="image" src="https://github.com/user-attachments/assets/8c72cd0d-77bf-4ccf-a553-7c5ccce55513" />
-<img width="1479" height="618" alt="image" src="https://github.com/user-attachments/assets/ae30ebcc-c613-47ec-a565-8a1247a67509" />
+With recon mode:
+<img width="1744" height="1188" alt="image" src="https://github.com/user-attachments/assets/9fd68233-080e-40fb-a798-4fc9f23827c9" />
+
+
+
+With full mode:
+
+<img width="1744" height="1972" alt="image" src="https://github.com/user-attachments/assets/8fb86d22-a051-4bf5-9114-9948c1728c63" />
 
 ## Status
 
