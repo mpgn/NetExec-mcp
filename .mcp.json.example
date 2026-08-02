@@ -1,18 +1,18 @@
 {
   "mcpServers": {
     "netexec": {
-      "command": "netexec-mcp",
-      "args": [],
+      "command": "netexec-mcp", // with uv "command": "uv"
+      "args": [], // with uv ["run", "--directory", "/path/", "netexec-mcp"],
       "env": {
-        "NXC_COMMAND": "netexec",
-        "NXC_PROTOCOLS": "smb,ldap,rdp,winrm,rdp,wmi,mssql",
+        "NXC_COMMAND": "netexec", // with uv "NXC_COMMAND": "uv run --directory /home/bonclay/NetExec netexec",
+        "NXC_PROTOCOLS": "smb,ldap,rdp,winrm,wmi,mssql",
         "NXC_SCOPE": "10.0.0.0/24,192.168.56.0/24",
-        "NXC_MODE": "recon",
+        "NXC_MODE": "recon", // suggest, recon, loot, full
         "NXC_TIMEOUT": "300",
         "NXC_MAX_TARGETS": "256",
         "NXC_AUDIT_LOG": "/home/bonclay/.netexec-mcp/audit.jsonl",
         "NXC_WORKSPACE": "default",
-        "NXC_TOOL_MODE": "dynamic",
+        "NXC_TOOL_MODE": "dynamic", // recommended
         "NXC_PATH": "~/.nxc"
       }
     }
