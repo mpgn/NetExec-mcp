@@ -9,13 +9,14 @@ It is a **pure subprocess wrapper**: it shells out to the `nxc` CLI as an argv l
 dependency. How nxc itself is installed (PATH / uv / pipx / docker) is entirely up to you.
 
 With recon mode:
-<img width="1744" height="1188" alt="image" src="https://github.com/user-attachments/assets/9fd68233-080e-40fb-a798-4fc9f23827c9" />
-
-
+<p align="center">
+  <img src="https://raw.githubusercontent.com/mpgn/NetExec-mcp/main/netexec-mcp-recon-shares.png" width="100%" alt="NetExec-MCP recon mode">
+</p>
 
 With full mode:
-
-<img width="1744" height="1972" alt="image" src="https://github.com/user-attachments/assets/8fb86d22-a051-4bf5-9114-9948c1728c63" />
+<p align="center">
+  <img src="https://raw.githubusercontent.com/mpgn/NetExec-mcp/main/netexec-mcp-full-gmsa.png" width="100%" alt="NetExec-MCP full mode">
+</p>
 
 ## Status
 
