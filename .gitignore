@@ -19,3 +19,5 @@ audit_out/*
 docs/*
 scripts/*
 .python-version
+*.svg
+*.png
