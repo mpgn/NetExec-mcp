@@ -1,20 +1,31 @@
 [project]
 name = "netexec-mcp"
-version = "0.1.0"
+version = "1.0.0"
 description = "MCP server that drives NetExec (nxc) for authorized security testing."
 readme = "README.md"
 requires-python = ">=3.10"
+license = "BSD-2-Clause"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Martial Puygrenier", email = "mpgn@pm.me" },
+]
 keywords = ["mcp", "netexec", "nxc", "pentest", "security", "active-directory", "smb", "ldap"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Information Technology",
+    "License :: OSI Approved :: BSD License",
     "Topic :: Security",
     "Programming Language :: Python :: 3",
-    "Operating System :: POSIX :: Linux",
+    "Operating System :: OS Independent",
 ]
 dependencies = [
     "fastmcp>=2.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/mpgn/netexec-mcp"
+Repository = "https://github.com/mpgn/netexec-mcp"
+Issues = "https://github.com/mpgn/netexec-mcp/issues"
 
 [project.scripts]
 netexec-mcp = "netexec_mcp.server:main"

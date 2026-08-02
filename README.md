@@ -36,7 +36,11 @@ step-budget note beneath it.
 ## Requirements
 
 - Python ≥ 3.10, [`uv`](https://docs.astral.sh/uv/) or [`pipx`](https://pipx.pypa.io/)
-- A working `nxc` / `netexec` reachable either on `PATH` or via `NXC_COMMAND`
+- **NetExec installed separately** — it is not a pip dependency and is not on PyPI.
+  See the [official install guide](https://www.netexec.wiki/getting-started/installation).
+  Any install works as long as `nxc` / `netexec` is reachable on `PATH` or via
+  `NXC_COMMAND`; the server runs `nxc --version` on boot and refuses to start if it
+  can't find it.
 
 ## Quick start
 
@@ -57,14 +61,18 @@ MCP client config (`command`/`args` launch the server itself):
 ```json
 {
   "command": "uv",
-  "args": ["run", "--directory", "/home/bonclay/NetExec-mcp", "netexec-mcp"]
+  "args": ["run", "--directory", "/path/to/netexec-mcp", "netexec-mcp"]
 }
 ```
 
-### Option B: pipx (installs `netexec-mcp` as a standalone CLI)
+### Option B: install from PyPI (standalone `netexec-mcp` CLI)
 
 ```bash
-pipx install /home/bonclay/NetExec-mcp   # local checkout; or a published sdist/wheel
+# Pick one installer — all put `netexec-mcp` on PATH:
+pipx install netexec-mcp                 # pipx
+uv tool install netexec-mcp              # uv
+# or run without installing:
+uvx netexec-mcp                          # uv, one-shot
 
 export NXC_COMMAND="nxc"                 # or however your nxc install is invoked
 export NXC_SCOPE="10.0.0.0/24"
@@ -72,7 +80,7 @@ export NXC_SCOPE="10.0.0.0/24"
 netexec-mcp
 ```
 
-MCP client config — `netexec-mcp` is on `PATH` via pipx, so no `uv`/`--directory` wrapper:
+MCP client config — `netexec-mcp` is on `PATH`, so no `uv`/`--directory` wrapper:
 
 ```json
 {
@@ -170,7 +178,7 @@ handlers reject.
 This MCP is a subprocess wrapper and pins no nxc dependency, but its tools/flags are
 verified against a specific nxc build:
 
-> **nxc 1.5.1 "Yippie-Ki-Yay", commit `cd599504`** (`cd599504…`, 2026-07-21, build 540)
+> **nxc 1.5.1 "Yippie-Ki-Yay", commit `738b842a`** (`738b842a…`, 2026-07-31, build 595)
 
 Check your local build with `nxc --version` (it prints `version - codename - commit - build`).
 nxc moves fast and occasionally moves/removes flags, so when you bump nxc, re-verify the

@@ -628,6 +628,8 @@ def register(mcp, get_config) -> None:
         `collection` is one or more (comma-separated) of: Group, LocalAdmin, Session,
         Trusts, Default, DCOnly, DCOM, RDP, PSRemote, LoggedOn, Container, ObjectProps,
         ACL, ADCS, All. Read-only: collects AD data to a local zip on the nxc host.
+        The default collector is BloodHound CE (nxc build >= 595); legacy-format output
+        is selected via nxc's config file, not a flag.
         """
         return await _ldap_run(
             get_config, ["--bloodhound", "-c", collection], targets, username=username,

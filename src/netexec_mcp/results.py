@@ -714,12 +714,16 @@ _BANNER_KV_RE = re.compile(r"\((?P<k>[A-Za-z0-9 ]+):(?P<v>[^)]*)\)")
 
 def parse_smb_hosts(text: str) -> list[dict]:
     """Parse SMB fingerprint banners into
-    `{host, port, hostname, os, name, domain, signing, smbv1}` (one per host).
+    `{host, port, hostname, os, name, domain, signing, smbv1, is_dc}` (one per host).
 
     A banner line is the info-marker fingerprint nxc prints on connect, e.g.::
 
         SMB 10.0.0.5 445 DC01 [*] Windows Server 2019 ... (name:DC01) (domain:CORP)
-        (signing:True) (SMBv1:False)
+        (signing:True) (SMBv1:False) (DC:True)
+
+    `is_dc` is `True` when nxc tags the host as a domain controller (the `(DC:True)`
+    field, added in nxc build 595); `None` when the tag is absent (not a DC, or the
+    `display_dc` config option is off).
     """
     hosts: list[dict] = []
     for raw in (text or "").splitlines():
@@ -727,6 +731,7 @@ def parse_smb_hosts(text: str) -> list[dict]:
         if not m or m["marker"] != "*" or "(name:" not in m["message"]:
             continue
         kv = {k.strip().lower(): v.strip() for k, v in _BANNER_KV_RE.findall(m["message"])}
+        dc_val = kv.get("dc")
         hosts.append({
             "host": m["host"],
             "port": int(m["port"]),
@@ -736,6 +741,7 @@ def parse_smb_hosts(text: str) -> list[dict]:
             "domain": kv.get("domain"),
             "signing": kv.get("signing"),
             "smbv1": kv.get("smbv1"),
+            "is_dc": None if dc_val is None else dc_val.lower() == "true",
         })
     return hosts
 

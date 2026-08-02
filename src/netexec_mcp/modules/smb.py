@@ -207,7 +207,8 @@ def register(mcp, get_config) -> None:
         a null session pass no credentials at all.
 
         Includes a structured `hosts` list: `{host, port, hostname, os, name, domain,
-        signing, smbv1}` per fingerprinted host.
+        signing, smbv1, is_dc}` per fingerprinted host (`is_dc` is `True` when nxc tags
+        the host as a domain controller, else `None`).
         """
         result = await _enum(
             get_config, "hosts", targets, username=username, password=password,
