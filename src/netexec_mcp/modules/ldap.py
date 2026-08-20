@@ -20,6 +20,8 @@ slow or high-latency DCs where the aggressive default trips a false connection e
 
 from __future__ import annotations
 
+import re
+
 from ..auth import build_auth_flags
 from ..executor import execute
 from ..results import (
@@ -33,10 +35,28 @@ from ..results import (
     parse_ldap_groups,
     parse_ldap_principals,
     parse_pass_pol,
+    parse_ldap_query,
     parse_password_not_required,
     parse_roast_hashes,
     parse_users,
 )
+
+_ATTR_SPLIT_RE = re.compile(r"[,;\s]+")
+
+
+def _normalize_attributes(attributes: list[str] | str | None) -> list[str]:
+    """Accept every spelling a model produces and return a clean attribute list.
+
+    nxc wants ONE space-separated argv element; a comma- or semicolon-separated list
+    is silently dropped (DN returned, zero attributes, exit 0), which gives the caller
+    no signal at all. Models write commas (they mirror the docstring's prose or JSON
+    habits), so normalize instead of failing quietly. A list is taken as-is, a string
+    is split on commas, semicolons and whitespace; blanks are dropped.
+    """
+    if attributes is None:
+        return []
+    items = attributes if isinstance(attributes, list) else _ATTR_SPLIT_RE.split(attributes)
+    return [a.strip() for a in items if a and a.strip()]
 
 
 async def _ldap_run(
@@ -529,7 +549,7 @@ def register(mcp, get_config) -> None:
     async def ldap_query(
         targets: list[str],
         ldap_filter: str,
-        attributes: str,
+        attributes: list[str] | str,
         base_dn: str | None = None,
         username: str | None = None,
         password: str | None = None,
@@ -551,18 +571,43 @@ def register(mcp, get_config) -> None:
     ) -> dict:
         """Run a custom LDAP query (`--query <filter> <attributes>`).
 
-        `ldap_filter` is an LDAP search filter (e.g. "(objectClass=user)"), `attributes`
-        is a space-separated attribute list (e.g. "sAMAccountName description").
-        `base_dn` overrides the search base.
+        `ldap_filter` is an LDAP search filter (e.g. "(objectClass=user)"). `attributes`
+        is the attribute list, either a real list (["sAMAccountName", "description"]) or
+        a string; commas, semicolons and spaces all work as separators. `base_dn`
+        overrides the search base. Results come back parsed in `entries`
+        (`[{host, dn, attrs}]`); an entry whose `attrs` is empty means the object was
+        found but the attribute list yielded nothing (see the `warning` field).
         """
         if not ldap_filter or not ldap_filter.strip():
             raise ValueError("ldap_filter is required for ldap_query")
+        # nxc takes ONE space-separated argv element. A comma- or semicolon-separated
+        # list is silently ignored by nxc (it returns the DN and no attribute at all),
+        # so normalize every spelling here rather than leave a silent dead end.
+        attr_list = _normalize_attributes(attributes)
         extra = ["--base-dn", base_dn] if base_dn else []
-        return await _ldap_run(
-            get_config, ["--query", ldap_filter, attributes], targets, extra_flags=extra,
+        result = await _ldap_run(
+            get_config, ["--query", ldap_filter, " ".join(attr_list)], targets, extra_flags=extra,
             username=username, password=password, ntlm_hash=ntlm_hash, domain=domain,
             kerberos=kerberos, use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, ldap_timeout=ldap_timeout,
         )
+        result["entries"] = parse_ldap_query(result["stdout"])
+        # Qualify an empty result instead of relaying bare silence: the model cannot
+        # otherwise tell "no such object" from "my attribute list was unusable".
+        # A dry-run preview has no output by construction -- never warn on it.
+        if result.get("dry_run"):
+            return result
+        if attr_list and result["entries"] and not any(e["attrs"] for e in result["entries"]):
+            result["warning"] = (
+                f"{len(result['entries'])} object(s) matched but NO attribute value was "
+                f"returned for {attr_list}. Check the attribute names exist on these "
+                "objects; pass them as a list or space-separated string."
+            )
+        elif not result["entries"] and not (result["stdout"] or "").strip():
+            result["warning"] = (
+                "no output at all: the filter matched nothing, or the target was not "
+                "reached. Verify the target is up before assuming an empty directory."
+            )
+        return result
 
     @mcp.tool()
     async def ldap_gmsa_convert_id(
