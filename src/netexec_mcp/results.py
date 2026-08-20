@@ -47,6 +47,28 @@ class StatusRecord:
     hostname: str | None = None
 
 
+def count_unmarked_lines(text: str) -> int:
+    """Count the non-empty stdout lines that carry NO status marker.
+
+    nxc publishes headings through `log.display()`/`success()`/`fail()`/`info()`
+    (which render a `[*]`/`[+]`/`[-]`/`[!]` marker and so land in `records`) but
+    publishes its *findings* through `log.highlight()`, which prints no marker at
+    all. `records`/`counts` therefore describe only the headings: for a tool with no
+    dedicated parser, a caller triaging on them reads "2 info, 1 success" and
+    concludes nothing was found, while the payload sits in `stdout`.
+
+    This is a *pointer*, not a capture -- it says "there are N lines I did not
+    summarise for you, read `stdout`". It is deliberately unfiltered: table headers,
+    `----` separators and nxc's block-separating blank highlights all count, because
+    deciding which of them are noise is exactly the lossy judgement a pointer avoids
+    having to make. See docs/unmarked-output-salience.md.
+    """
+    return sum(
+        1 for raw in (text or "").splitlines()
+        if raw.strip() and not _MARKER_ANYWHERE_RE.search(raw)
+    )
+
+
 def parse_markers(text: str) -> list[StatusRecord]:
     """Turn nxc stdout into a list of StatusRecord (one per marker line)."""
     records: list[StatusRecord] = []
@@ -785,6 +807,52 @@ def parse_dc_list(text: str) -> list[dict]:
         if m:
             rows.append({"host": prefix["host"], "dc": m["dc"], "ip": m["ip"]})
     return rows
+
+
+# --- LDAP custom query (`ldap_query`) -------------------------------------- #
+# nxc emits one `[+] Response for object: <DN>` marker line per hit, then the
+# requested attributes as plain `<name>    <value>` lines under it:
+#     LDAP 10.0.0.1 389 DC01  [+] Response for object: CN=x,CN=System,DC=lab
+#     LDAP 10.0.0.1 389 DC01  trustDirection       3
+# A hit with NO attribute lines is the signature of an attribute list nxc could
+# not use (e.g. comma-separated) -- surfacing `attrs: {}` is what makes that
+# visible instead of the model seeing a wall of text and inferring nothing.
+_QUERY_OBJECT_RE = re.compile(r"^Response for object:\s*(?P<dn>.+?)\s*$")
+_QUERY_ATTR_RE = re.compile(r"^(?P<name>[A-Za-z][\w-]*)\s{2,}(?P<value>.*?)\s*$")
+
+
+def parse_ldap_query(text: str) -> list[dict]:
+    """Parse `nxc ldap --query <filter> <attributes>` into `{host, dn, attrs}` entries.
+
+    Repeated attributes accumulate into a list (LDAP attributes are multi-valued).
+    Returns `[]` when nothing matched, and entries with an empty `attrs` when the
+    object was found but no attribute came back.
+    """
+    entries: list[dict] = []
+    for raw in (text or "").splitlines():
+        line = raw.rstrip()
+        prefix = _PREFIX_RE.match(line)
+        if not prefix:
+            continue
+        payload = line[prefix.end():].strip()
+        if (marker := _MARKER_RE.search(payload)):
+            obj = _QUERY_OBJECT_RE.match(marker["message"].strip())
+            if obj:
+                entries.append({"host": prefix["host"], "dn": obj["dn"], "attrs": {}})
+            continue
+        if not entries:                       # attribute line before any object header
+            continue
+        attr = _QUERY_ATTR_RE.match(payload)
+        if not attr:
+            continue
+        attrs = entries[-1]["attrs"]
+        name, value = attr["name"], attr["value"]
+        if name in attrs:
+            existing = attrs[name]
+            attrs[name] = existing + [value] if isinstance(existing, list) else [existing, value]
+        else:
+            attrs[name] = value
+    return entries
 
 
 # --- MSSQL enum_impersonate / enum_links (`-M` modules) -------------------- #

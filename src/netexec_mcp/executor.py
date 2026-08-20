@@ -34,7 +34,7 @@ from .guardrails import (
     parse_scope,
     write_audit,
 )
-from .results import StatusRecord, parse_markers
+from .results import StatusRecord, count_unmarked_lines, parse_markers
 
 # Matches CSI / SGR escape sequences such as the colour codes nxc emits.
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
@@ -185,6 +185,12 @@ class ExecOutcome:
     stderr: str = ""
     records: list[StatusRecord] = field(default_factory=list)
     counts: dict[str, int] = field(default_factory=dict)
+    # How many non-empty stdout lines carry no status marker, i.e. how much of the output
+    # `records`/`counts` do NOT describe. nxc prints findings via `log.highlight()`, which
+    # emits no marker, so for a tool with no dedicated parser the structured summary can read
+    # "nothing found" over a stdout full of results. A pointer to `stdout`, not a second copy
+    # of it -- see docs/unmarked-output-salience.md.
+    unparsed_lines: int = 0
     # Set (instead of running) when a named account was given with no secret but nxc already
     # holds a reusable credential for it in this protocol's DB -- see execute()'s auth-nudge.
     auth_suggestion: dict | None = None
@@ -366,6 +372,7 @@ async def execute(
     result = await run_async(argv, config.timeout, env=env)
     records = parse_markers(result.stdout)
     counts = dict(Counter(r.status for r in records))
+    unparsed_lines = count_unmarked_lines(result.stdout)
     write_audit(
         config.audit_log,
         {
@@ -385,4 +392,5 @@ async def execute(
         stderr=result.stderr,
         records=records,
         counts=counts,
+        unparsed_lines=unparsed_lines,
     )

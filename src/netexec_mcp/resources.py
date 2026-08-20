@@ -77,6 +77,13 @@ _WORKFLOWS = """# Common workflows
 **Module long tail**: discover with `nxc_list_modules` / `nxc_search_tools`, run with
 `nxc_run_module` (ENUMERATION → recon; CREDENTIAL_DUMPING → loot; others need full).
 
+**Reading a result**: `records`/`counts` summarise only the lines nxc tagged `[*]`/`[+]`/
+`[-]`/`[!]`. Findings are often printed untagged, so those fields can read as "nothing
+found" over a `stdout` full of results. `unparsed_lines` is the count of untagged
+non-empty lines: when it is > 0, the summary is incomplete and `stdout` holds the payload.
+Tools that document a structured list (`shares`, `secrets`, `hashes`, …) have already
+extracted theirs.
+
 **Recall vs. re-scan**: before re-running enumeration, check what's already collected.
 `workspace_admins` / `workspace_loggedin` / `workspace_hosts` (pass `protocol=`) read
 nxc's local workspace DB (no target, no creds), and `workspace_cred_reach` correlates an
