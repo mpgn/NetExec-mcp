@@ -24,18 +24,73 @@ from .executor import execute
 # A module line in `nxc <proto> -L` output (after ANSI strip):
 #   [*] enum_av                   Gathers information on ...
 _MODULE_RE = re.compile(r"^\[\*\]\s+(?P<name>\S+)\s+(?P<desc>.*)$")
-# Privilege banner: "LOW PRIVILEGE MODULES" / "HIGH PRIVILEGE MODULES".
-_PRIV_RE = re.compile(r"^(?P<level>LOW|HIGH) PRIVILEGE MODULES$", re.IGNORECASE)
+# Privilege banner: "LOW PRIVILEGE MODULES" / "HIGH PRIVILEGE MODULES". nxc appends a
+# parenthetical to the HIGH one ("... (requires admin privs)"), so the pattern must NOT be
+# anchored at the end: it was, and the banner therefore never matched -- every module, up to
+# and including `ntdsutil` and `lsassy`, was served to the model as `privilege: low`.
+_PRIV_RE = re.compile(r"^(?P<level>LOW|HIGH) PRIVILEGE MODULES\b", re.IGNORECASE)
 
 
-def parse_module_list(text: str) -> list[dict]:
-    """Parse `nxc <proto> -L` stdout into structured module records.
+_REMOVED_TAG = "[REMOVED]"
 
-    Each record: ``{name, description, category, privilege}``. Category headers
-    (e.g. ENUMERATION) and privilege banners are tracked as we scan and attached
-    to the modules beneath them. Modules tagged ``[REMOVED]`` are skipped.
+# Where each retired module went. nxc still LISTS them in `-L` (tagged `[REMOVED]`) but only
+# two carry the replacement in their description; the other nine reveal it at run time, in a
+# `context.log.fail("[REMOVED] ...")` reached only with valid credentials on a live target --
+# i.e. never, in practice. Filtering them out silently (what we do, and should keep doing:
+# offering a dead module wastes a turn) leaves a list that LOOKS complete with the capability
+# missing and no word about it. So we filter them out of `modules` and serve them, with the
+# pointer, in `removed`.
+#
+# These notes are COPIED FROM UPSTREAM, not invented: each one restates the module's own
+# `[REMOVED]` fail message in terms of the tool that now does the job. When bumping nxc, run
+# tests/test_meta.py::test_removed_module_table_matches_nxc_sources to catch drift.
+_REMOVED_GENERIC_NOTE = "removed from nxc: this module can no longer run."
+REMOVED_MODULE_NOTES = {
+    # ldap
+    "enum_trusts": (
+        "removed from nxc, which redirects to the `--dc-list` LDAP flag: use `ldap_dc_list`, "
+        "whose stdout prints every trusted domain ALREADY DECODED "
+        "(`north.example.local -> Bidirectional -> Within Forest`). That line needs the trusted "
+        "domain's DCs to resolve over DNS; when they do not, read the attributes directly with "
+        "`ldap_query` on `(objectClass=trustedDomain)`."
+    ),
+    "group-mem": (
+        'removed from nxc, which redirects to the `--groups "<group>"` LDAP flag: call '
+        "`ldap_groups` with a group name to list its members."
+    ),
+    "ldap-checker": (
+        "removed from nxc: LDAP signing and channel binding are now reported natively in the "
+        "host banner, i.e. in the output of `ldap_enum_hosts`."
+    ),
+    "pso": "removed from nxc, which redirects to the core `--pso` option: use `ldap_pso`.",
+    # smb
+    "petitpotam": "removed from nxc, which redirects to the `coerce_plus` module: use `smb_coerce_plus`.",
+    "printerbug": "removed from nxc, which redirects to the `coerce_plus` module: use `smb_coerce_plus`.",
+    "shadowcoerce": "removed from nxc, which redirects to the `coerce_plus` module: use `smb_coerce_plus`.",
+    "dfscoerce": "removed from nxc, which redirects to the `coerce_plus` module: use `smb_coerce_plus`.",
+    "efsr_spray": (
+        "removed from nxc: EFS is now activated automatically by `coerce_plus`, so use "
+        "`smb_coerce_plus`."
+    ),
+    "firefox": "removed from nxc, which redirects to the `--dpapi` flag: use `smb_dpapi`.",
+    "ntlm_reflection": (
+        "removed from nxc: integrated into the `enum_cve` module, reachable with "
+        'nxc_run_module(module="enum_cve").'
+    ),
+}
+
+
+def removed_module_note(name: str) -> str:
+    """The redirect for a retired module, or a generic 'it cannot run' when unknown."""
+    return REMOVED_MODULE_NOTES.get(name, _REMOVED_GENERIC_NOTE)
+
+
+def _scan_modules(text: str):
+    """Yield ``(record, is_removed)`` for every module line in `nxc <proto> -L` stdout.
+
+    Category headers (e.g. ENUMERATION) and privilege banners are tracked as we scan and
+    attached to the modules beneath them.
     """
-    modules: list[dict] = []
     privilege: str | None = None
     category: str | None = None
 
@@ -47,15 +102,17 @@ def parse_module_list(text: str) -> list[dict]:
         m = _MODULE_RE.match(line)
         if m:
             desc = m["desc"].strip()
-            if "[REMOVED]" in desc:
-                continue
-            modules.append(
+            removed = _REMOVED_TAG in desc
+            if removed:                       # the tag is noise once the field says so
+                desc = desc.replace(_REMOVED_TAG, "").strip()
+            yield (
                 {
                     "name": m["name"],
                     "description": desc,
                     "category": category,
                     "privilege": privilege,
-                }
+                },
+                removed,
             )
             continue
 
@@ -74,7 +131,29 @@ def parse_module_list(text: str) -> list[dict]:
         ):
             category = line
 
-    return modules
+
+def parse_module_list(text: str) -> list[dict]:
+    """Parse `nxc <proto> -L` stdout into structured records for the RUNNABLE modules.
+
+    Each record: ``{name, description, category, privilege}``. Modules tagged ``[REMOVED]``
+    are excluded -- deliberately, and they must stay excluded: this list also feeds
+    :func:`_module_categories`, i.e. the recon/loot/full gate, so a retired module leaking in
+    would be classified and offered as runnable. Read them with :func:`parse_removed_modules`.
+    """
+    return [rec for rec, removed in _scan_modules(text) if not removed]
+
+
+def parse_removed_modules(text: str) -> list[dict]:
+    """Parse the ``[REMOVED]`` modules out of `nxc <proto> -L` into ``{name, description, note}``.
+
+    Deliberately a SEPARATE list from :func:`parse_module_list`, never a flag on the same
+    records: these must never reach the category cache that gates execution.
+    """
+    return [
+        {"name": rec["name"], "description": rec["description"], "note": removed_module_note(rec["name"])}
+        for rec, removed in _scan_modules(text)
+        if removed
+    ]
 
 
 def _matches(module: dict, query: str) -> bool:
@@ -117,7 +196,15 @@ def register(mcp, get_config) -> None:
         """
         outcome = await execute(get_config(), protocol, [], ["-L"], offensive=False)
         modules = parse_module_list(outcome.stdout)
-        return {"protocol": protocol, "count": len(modules), "modules": modules}
+        # `count` stays the number of RUNNABLE modules, so it keeps matching len(modules).
+        # `removed` is what nxc still lists but retired: without it the response looks
+        # complete while the capability is simply absent, which reads as "nxc cannot do this".
+        return {
+            "protocol": protocol,
+            "count": len(modules),
+            "modules": modules,
+            "removed": parse_removed_modules(outcome.stdout),
+        }
 
     @mcp.tool()
     async def nxc_search_tools(query: str, protocol: str = "smb") -> dict:
@@ -127,7 +214,16 @@ def register(mcp, get_config) -> None:
         """
         outcome = await execute(get_config(), protocol, [], ["-L"], offensive=False)
         modules = [m for m in parse_module_list(outcome.stdout) if _matches(m, query)]
-        return {"protocol": protocol, "query": query, "count": len(modules), "modules": modules}
+        # Retired modules are filtered on the query too: an unfiltered `removed` would answer
+        # every search with the same 4-7 dead names, trading a bad result for pure noise.
+        removed = [m for m in parse_removed_modules(outcome.stdout) if _matches(m, query)]
+        return {
+            "protocol": protocol,
+            "query": query,
+            "count": len(modules),
+            "modules": modules,
+            "removed": removed,
+        }
 
     @mcp.tool()
     async def nxc_run_module(
@@ -155,6 +251,16 @@ def register(mcp, get_config) -> None:
         `NXC_MODE=loot`; `PRIVILEGE_ESCALATION`/unknown need `NXC_MODE=full`. If the
         category can't be determined, it is gated as full-only offensive (conservative).
         """
+        # A retired module is refused HERE, from a constant, before anything else. Two reasons
+        # it cannot be derived from a live `-L`: `_module_categories` needs an execution, which
+        # dry_run/suggest mode does not perform (so the set would be empty exactly where the
+        # preview matters), and without this guard the call falls through to the conservative
+        # gate below and is refused as an "offensive, state-changing action requiring
+        # NXC_MODE=full" -- a wrong reason that invites the model to ask for mode elevation for
+        # a module that no longer exists.
+        if module in REMOVED_MODULE_NOTES:
+            raise ValueError(f"module {module!r} no longer exists: {removed_module_note(module)}")
+
         cfg = get_config()
         offensive = True   # conservative default
         dump = False       # unknown -> full-only, not loot

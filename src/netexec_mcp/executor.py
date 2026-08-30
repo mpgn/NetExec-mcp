@@ -14,11 +14,13 @@ This is the execution layer that everything else sits on:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import contextvars
 import ipaddress
 import os
 import re
 import shlex
+import signal
 import socket
 import subprocess
 from collections import Counter
@@ -141,13 +143,45 @@ def run(argv: list[str], timeout: int) -> CommandResult:
     )
 
 
+async def _drain(stream: asyncio.StreamReader, buf: bytearray) -> None:
+    """Read `stream` to EOF into `buf`.
+
+    Deliberately NOT `communicate()`: that accumulates internally and loses everything
+    it has read if the awaiting task is cancelled. Writing into a caller-owned buffer
+    means a cancelled read still leaves the bytes already received. See run_async().
+    """
+    while True:
+        chunk = await stream.read(8192)
+        if not chunk:
+            break
+        buf.extend(chunk)
+
+
+# Grace period for the drains to reach EOF after the process has been killed. Bounded on
+# purpose: without it a surviving grandchild that still holds the pipes would hang here.
+_DRAIN_GRACE_S = 5
+
+
 async def run_async(argv: list[str], timeout: int, env: dict | None = None) -> CommandResult:
     """Async runner (no shell) with a hard timeout.
 
-    On timeout the process is killed and whatever output was produced is returned
-    with `timed_out=True` and `returncode=None`. Raises FileNotFoundError if the
+    On timeout the whole process GROUP is killed and whatever output was produced is
+    returned with `timed_out=True` and `returncode=None`. Raises FileNotFoundError if the
     executable is missing. `env` (if given) is merged over the inherited environment
     for this subprocess only (e.g. KRB5CCNAME for a per-call ccache).
+
+    Three details here are load-bearing; see docs/BUG-executor-timeout-orphan.md for the
+    incident that produced them, and for the reproduction.
+
+    1. `start_new_session=True` puts the command in its own process group (so pgid == pid).
+       `argv[0]` is usually a LAUNCHER -- `uv run ... netexec ...`, and likewise for
+       poetry/pipx/docker installs -- so killing `proc` alone kills the launcher and
+       leaves nxc running, reparented to init, still holding the pipes.
+    2. The kill therefore targets the group, not the process.
+    3. The drains are plain tasks that are never awaited inside a cancellable scope, and
+       `proc.wait()` is shielded. If the drains sat under the `wait_for`, its cancellation
+       would kill them at the instant of expiry and every byte still in the pipe would be
+       lost. Measured: 3.1 MB lost on a command that was still writing when it expired.
     """
     proc = await asyncio.create_subprocess_exec(
         *argv,
@@ -156,22 +190,52 @@ async def run_async(argv: list[str], timeout: int, env: dict | None = None) -> C
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env=None if env is None else {**os.environ, **env},
+        start_new_session=True,
     )
+    out, err = bytearray(), bytearray()
+    drains = [
+        asyncio.create_task(_drain(proc.stdout, out)),
+        asyncio.create_task(_drain(proc.stderr, err)),
+    ]
     timed_out = False
     try:
-        out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        await asyncio.wait_for(asyncio.shield(proc.wait()), timeout=timeout)
     except asyncio.TimeoutError:
         timed_out = True
-        proc.kill()
-        out, err = await proc.communicate()
+        _kill_tree(proc)
+    finally:
+        # Both paths: let the drains reach EOF, under a hard bound. Whatever they have
+        # already put in `out`/`err` survives even if they are cancelled here.
+        await asyncio.wait(drains, timeout=_DRAIN_GRACE_S)
+        for d in drains:
+            d.cancel()
 
     return CommandResult(
         argv=list(argv),
         returncode=None if timed_out else proc.returncode,
-        stdout=strip_ansi(out.decode(errors="replace")),
-        stderr=filter_runner_noise(strip_ansi(err.decode(errors="replace"))),
+        stdout=strip_ansi(bytes(out).decode(errors="replace")),
+        stderr=filter_runner_noise(strip_ansi(bytes(err).decode(errors="replace"))),
         timed_out=timed_out,
     )
+
+
+def _kill_tree(proc: asyncio.subprocess.Process) -> None:
+    """SIGKILL the command's process group, falling back to the process alone.
+
+    The fallback is NOT equivalent: on a launcher/child pair it kills only the launcher
+    and leaves the child alive, which is the original bug. It exists solely for platforms
+    without process groups (Windows), where the bounded drain wait is what prevents the
+    hang instead.
+    """
+    try:
+        if hasattr(os, "killpg"):
+            os.killpg(proc.pid, signal.SIGKILL)   # pgid == pid, via start_new_session
+        else:                                     # pragma: no cover -- Windows
+            proc.kill()
+    except (ProcessLookupError, PermissionError, OSError):
+        # Already dead, or the group is gone. Nothing left to kill.
+        with contextlib.suppress(ProcessLookupError, OSError):
+            proc.kill()
 
 
 @dataclass

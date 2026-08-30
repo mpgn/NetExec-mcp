@@ -895,3 +895,143 @@ def parse_mssql_links(text: str) -> list[dict]:
         if server:
             rows.append({"host": m["host"], "linked_server": server})
     return rows
+
+
+# --- Numeric AD attribute decoding (`decoded`, a SIBLING of `attrs`) -------- #
+# `ldap_query` returns exactly what nxc printed, which for these attributes is a bare
+# integer: `trustDirection: "3"`, `trustAttributes: "32"`. Correct, and meaningless to a
+# reader who doesn't know MS-ADTS. We add the reading NEXT TO the raw value, never in place
+# of it: an operator keeps the number, a model gets the sense, nothing existing breaks.
+#
+# The tables are COPIED from sources on the machine, not written from memory, because a
+# wrong flag table turns opaque data into credible-but-false data that nobody re-reads:
+#   * trust tables       -> nxc/protocols/ldap.py (which cites MS-ADTS 6.1.6.7.9 / 6.1.6.7.12)
+#   * userAccountControl -> impacket.dcerpc.v5.samr UF_* constants, which nxc itself imports
+# See tests/test_results.py for the value-by-value assertions.
+
+# trustDirection: an ENUMERATION (a single value), NOT a bitmask.
+_TRUST_DIRECTION = {
+    0: "Disabled",
+    1: "Inbound",
+    2: "Outbound",
+    3: "Bidirectional",
+}
+
+# trustType: also an enumeration.
+_TRUST_TYPE = {
+    1: "Windows NT",
+    2: "Active Directory",
+    3: "Kerberos",
+    4: "Unknown",
+    5: "Azure Active Directory",
+}
+
+# trustAttributes: a BITMASK. Several flags can be set at once.
+_TRUST_ATTRIBUTE_FLAGS = {
+    0x1: "Non-Transitive",
+    0x2: "Uplevel-Only",
+    0x4: "Quarantined Domain",
+    0x8: "Forest Transitive",
+    0x10: "Cross Organization",
+    0x20: "Within Forest",
+    0x40: "Treat as External",
+    0x80: "Uses RC4 Encryption",
+    0x200: "Cross Organization No TGT Delegation",
+    0x800: "Cross Organization Enable TGT Delegation",
+    0x2000: "PAM Trust",
+}
+
+# userAccountControl: a BITMASK, and the attribute every AD audit reads. The flags that
+# answer an offensive-recon question directly are ACCOUNTDISABLE, PASSWD_NOTREQD,
+# DONT_REQUIRE_PREAUTH (AS-REP roastable) and TRUSTED_FOR_DELEGATION (unconstrained).
+_UAC_FLAGS = {
+    0x1: "SCRIPT",
+    0x2: "ACCOUNTDISABLE",
+    0x8: "HOMEDIR_REQUIRED",
+    0x10: "LOCKOUT",
+    0x20: "PASSWD_NOTREQD",
+    0x40: "PASSWD_CANT_CHANGE",
+    0x80: "ENCRYPTED_TEXT_PASSWORD_ALLOWED",
+    0x100: "TEMP_DUPLICATE_ACCOUNT",
+    0x200: "NORMAL_ACCOUNT",
+    0x800: "INTERDOMAIN_TRUST_ACCOUNT",
+    0x1000: "WORKSTATION_TRUST_ACCOUNT",
+    0x2000: "SERVER_TRUST_ACCOUNT",
+    0x10000: "DONT_EXPIRE_PASSWD",
+    0x20000: "MNS_LOGON_ACCOUNT",
+    0x40000: "SMARTCARD_REQUIRED",
+    0x80000: "TRUSTED_FOR_DELEGATION",
+    0x100000: "NOT_DELEGATED",
+    0x200000: "USE_DES_KEY_ONLY",
+    0x400000: "DONT_REQUIRE_PREAUTH",
+    0x800000: "PASSWORD_EXPIRED",
+    0x1000000: "TRUSTED_TO_AUTHENTICATE_FOR_DELEGATION",
+    0x2000000: "NO_AUTH_DATA_REQUIRED",
+    0x4000000: "PARTIAL_SECRETS_ACCOUNT",
+    0x8000000: "USE_AES_KEYS",
+}
+
+_ENUM_ATTRS = {
+    "trustdirection": _TRUST_DIRECTION,
+    "trusttype": _TRUST_TYPE,
+}
+_FLAG_ATTRS = {
+    "trustattributes": _TRUST_ATTRIBUTE_FLAGS,
+    "useraccountcontrol": _UAC_FLAGS,
+}
+
+
+def _as_int(value) -> int | None:
+    """The attribute value as an int, or None when it isn't one (never raises)."""
+    if isinstance(value, bool):          # bool is an int subclass; not a numeric attribute
+        return None
+    if isinstance(value, int):
+        return value
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _decode_one(name: str, value) -> dict | None:
+    """Decode a single attribute value, or None when there is nothing certain to say."""
+    key = name.lower()
+    number = _as_int(value)
+    if number is None:                   # not an integer -> no entry, no guess
+        return None
+
+    if (table := _ENUM_ATTRS.get(key)) is not None:
+        meaning = table.get(number)
+        # An unmapped enum value gets NO entry: half an answer here would read as an answer.
+        return {"value": number, "meaning": meaning} if meaning is not None else None
+
+    if (table := _FLAG_ATTRS.get(key)) is not None:
+        flags = [text for bit, text in table.items() if number & bit]
+        out = {"value": number, "flags": flags}
+        # Bits we have no name for are REPORTED, not dropped: silence here would let an
+        # unknown flag look like an absent one.
+        if (unknown := number & ~sum(table)) :
+            out["unknown_bits"] = hex(unknown)
+        return out
+
+    return None                          # attribute not in any table -> passes through intact
+
+
+def decode_attributes(attrs: dict) -> dict:
+    """Return the `decoded` sibling for an `attrs` mapping: `{name: {...}}`.
+
+    Only attributes present in the tables produce an entry; everything else passes through
+    untouched (this NEVER rewrites `attrs`, and never raises). A multi-valued attribute
+    (`attrs[name]` is a list, since LDAP attributes are multi-valued) decodes to a list, so
+    `decoded` mirrors the shape of `attrs`. Returns `{}` when nothing is decodable, which the
+    caller uses to omit the key entirely rather than pay tokens for an empty object.
+    """
+    decoded: dict = {}
+    for name, value in (attrs or {}).items():
+        if isinstance(value, list):
+            items = [d for v in value if (d := _decode_one(name, v)) is not None]
+            if items:
+                decoded[name] = items
+        elif (one := _decode_one(name, value)) is not None:
+            decoded[name] = one
+    return decoded

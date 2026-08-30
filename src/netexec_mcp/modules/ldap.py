@@ -25,6 +25,7 @@ import re
 from ..auth import build_auth_flags
 from ..executor import execute
 from ..results import (
+    decode_attributes,
     parse_dc_list,
     parse_domain_sid,
     parse_ldap_computers,
@@ -322,9 +323,14 @@ def register(mcp, get_config) -> None:
         pem_key: str | None = None,
         ldap_timeout: int | None = None,
     ) -> dict:
-        """Enumerate the domain controllers (`--dc-list`).
+        """Enumerate the domain controllers and the forest's domain trusts (`--dc-list`).
 
-        Includes a structured `dcs` list: `{host, dc, ip}`.
+        Includes a structured `dcs` list: `{host, dc, ip}`. nxc additionally prints every
+        trusted domain ALREADY DECODED in `stdout`
+        (`north.example.local -> Bidirectional -> Within Forest`), which makes this the
+        fastest way to characterize a trust. That line is only emitted when the trusted
+        domain's DCs resolve over DNS (SRV `_ldap._tcp.dc._msdcs.<trust>`); when they do
+        not, read the raw attributes with `ldap_query` on `(objectClass=trustedDomain)`.
         """
         result = await _ldap_run(
             get_config, ["--dc-list"], targets, username=username, password=password,
@@ -569,7 +575,12 @@ def register(mcp, get_config) -> None:
         pem_key: str | None = None,
         ldap_timeout: int | None = None,
     ) -> dict:
-        """Run a custom LDAP query (`--query <filter> <attributes>`).
+        """Run a custom LDAP query (`--query <filter> <attributes>`), e.g. for domain trusts.
+
+        The escape hatch for anything the dedicated `ldap_*` tools do not cover, e.g.
+        `(objectClass=trustedDomain)` with `trustPartner trustDirection trustAttributes`
+        to read a domain trust from the directory itself (`ldap_dc_list` shows the same
+        trust already decoded, but only when DNS cooperates).
 
         `ldap_filter` is an LDAP search filter (e.g. "(objectClass=user)"). `attributes`
         is the attribute list, either a real list (["sAMAccountName", "description"]) or
@@ -577,6 +588,11 @@ def register(mcp, get_config) -> None:
         overrides the search base. Results come back parsed in `entries`
         (`[{host, dn, attrs}]`); an entry whose `attrs` is empty means the object was
         found but the attribute list yielded nothing (see the `warning` field).
+
+        An entry also carries `decoded` when it holds an attribute whose value is a raw
+        number: `userAccountControl`, `trustDirection`, `trustType`, `trustAttributes` are
+        returned both raw (in `attrs`) and read out (in `decoded`), e.g.
+        `{"value": 4194816, "flags": ["NORMAL_ACCOUNT", "DONT_REQUIRE_PREAUTH"]}`.
         """
         if not ldap_filter or not ldap_filter.strip():
             raise ValueError("ldap_filter is required for ldap_query")
@@ -591,6 +607,13 @@ def register(mcp, get_config) -> None:
             kerberos=kerberos, use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, ldap_timeout=ldap_timeout,
         )
         result["entries"] = parse_ldap_query(result["stdout"])
+        # Numeric AD attributes get their reading NEXT TO the raw value, never instead of it:
+        # `trustDirection: "3"` stays, and a `decoded` sibling says "Bidirectional". The key is
+        # omitted when nothing is decodable, so an enumeration of plain string attributes pays
+        # nothing for this.
+        for entry in result["entries"]:
+            if decoded := decode_attributes(entry["attrs"]):
+                entry["decoded"] = decoded
         # Qualify an empty result instead of relaying bare silence: the model cannot
         # otherwise tell "no such object" from "my attribute list was unusable".
         # A dry-run preview has no output by construction -- never warn on it.
