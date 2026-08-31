@@ -37,7 +37,11 @@ from ..results import (
 _ENUM_FLAGS = {
     "hosts": [],                       # bare smb scan: OS / domain / signing
     "shares": ["--shares"],
-    "sessions": ["--qwinsta"],         # nxc removed --smb-sessions; --qwinsta is the replacement
+    # nxc still DEFINES --smb-sessions in proto_args but its handler answers
+    # "[REMOVED] Use option --reg-sessions --qwinsta or --loggedon-users" -- argparse
+    # accepting a flag is not the same as nxc honouring it. We use --qwinsta; the other
+    # live one, --reg-sessions, has no dedicated tool yet.
+    "sessions": ["--qwinsta"],
     "disks": ["--disks"],
     "loggedon_users": ["--loggedon-users"],
     "users": ["--users"],
@@ -207,8 +211,10 @@ def register(mcp, get_config) -> None:
         a null session pass no credentials at all.
 
         Includes a structured `hosts` list: `{host, port, hostname, os, name, domain,
-        signing, smbv1, is_dc}` per fingerprinted host (`is_dc` is `True` when nxc tags
-        the host as a domain controller, else `None`).
+        signing, smbv1, is_dc}` per fingerprinted host. `is_dc` is `True` or `None`,
+        never `False`: nxc prints its `(DC:...)` tag only when it concluded the host IS a
+        domain controller, so `None` means "not tagged" (a member server, or a check nxc
+        left inconclusive), not "the parser missed it". Confirmed live on GOAD.
         """
         result = await _enum(
             get_config, "hosts", targets, username=username, password=password,
@@ -275,7 +281,10 @@ def register(mcp, get_config) -> None:
     ) -> dict:
         """List interactive user sessions on the target (`--qwinsta`).
 
-        (nxc removed the old `--smb-sessions`; this uses `--qwinsta`, its replacement.)
+        This is the "who is logged on at the console/RDP" view; nxc's old `--smb-sessions`
+        is refused by its handler ("[REMOVED]"), and `--qwinsta` is what replaced it. A
+        third view, `--reg-sessions` (sessions read from the remote registry, optionally
+        filtered by user), has no dedicated tool yet -- reach it with `nxc_raw_command`.
         """
         return await _enum(
             get_config, "sessions", targets, username=username, password=password,

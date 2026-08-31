@@ -282,6 +282,24 @@ def parse_ldap_group_members(text: str) -> list[dict]:
     return _parse_bare_names(text, "member")
 
 
+def parse_ldap_ous(text: str) -> list[dict]:
+    """Parse `nxc ldap --ous` into `{host, ou, distinguished_name}`.
+
+    Bare `--ous` prints the OU inventory as a two-column table; the DN column is what
+    makes the result usable, since it is the `base_dn` to feed back into `ldap_query`.
+    """
+    return _parse_columns(
+        text, [("ou", "-OU-"), ("distinguished_name", "-Distinguished Name-")]
+    )
+
+
+def parse_ldap_ou_users(text: str) -> list[dict]:
+    """Parse `nxc ldap --ous <OU>` (users scoped to that OU) into `{host, username, cn}`."""
+    return _parse_columns(
+        text, [("username", "-sAMAccountName-"), ("cn", "-cn-")]
+    )
+
+
 def parse_ldap_principals(text: str) -> list[dict]:
     """`nxc ldap --admin-count` / `--trusted-for-delegation` -> `{host, name}`
     (bare principal list, same shape as a narrowed group)."""
@@ -744,8 +762,10 @@ def parse_smb_hosts(text: str) -> list[dict]:
         (signing:True) (SMBv1:False) (DC:True)
 
     `is_dc` is `True` when nxc tags the host as a domain controller (the `(DC:True)`
-    field, added in nxc build 595); `None` when the tag is absent (not a DC, or the
-    `display_dc` config option is off).
+    field, added in nxc build 595); `None` when the tag is absent. It is never `False`:
+    nxc emits the field only for a truthy `isdc` (`smb.py:328`), so a member server and a
+    check nxc left inconclusive look identical on the wire. Verified live at build 677
+    (KINGSLANDING -> True, CASTELBLACK -> no field).
     """
     hosts: list[dict] = []
     for raw in (text or "").splitlines():

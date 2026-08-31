@@ -6,14 +6,16 @@ share enumeration and file transfer:
 
   * **Read-only** (``offensive=False``) -- portmapper fingerprint, share listing,
     recursive share enumeration (with access perms), and directory listing.
+  * **Loot** (``dump=True``, ``NXC_MODE=loot``) -- reading file contents back, by
+    download (``--get-file``) or straight to stdout (``--cat``).
   * **Offensive** (``offensive=True``, only under ``NXC_MODE=full``) -- file
-    download / upload (upload is chmod 777) and ``chmod`` of remote files.
+    upload (chmod 777) and ``chmod`` of remote files.
 
 **Auth model -- none.** nxc's NFS connection has no ``plaintext_login``: NFS uses
 AUTH_SYS (uid/gid, auto-detected by nxc), not username/password. So these tools take
 **no credential parameters** -- only ``--port`` (111) / ``--nfs-timeout`` and the
-operation flags. ``--share`` selects the share for ``--ls`` / ``--get-file`` /
-``--put-file``.
+operation flags. ``--share`` selects the share for ``--ls`` / ``--cat`` /
+``--get-file`` / ``--put-file``.
 
 *(No live lab was available; source-verified against ``proto_args.py`` + handler and
 unit-tested, but not validated end-to-end.)*
@@ -107,6 +109,29 @@ def register(mcp, get_config) -> None:
         )
 
     # ---- Offensive (loot for read-only file harvest; full for write) ---- #
+
+    @mcp.tool()
+    async def nfs_cat_file(
+        targets: list[str],
+        remote_file: str,
+        share: str | None = None,
+        port: int | None = None,
+        nfs_timeout: int | None = None,
+    ) -> dict:
+        """Print the contents of a file on an NFS share (`--cat <file>`).
+
+        `remote_file` is the path on the share; `share` selects the export (without it
+        nxc uses its root-escape handle when it has one). The file is streamed back in
+        `stdout`, so this reads a file without writing anything to the nxc host, unlike
+        `nfs_get_file`. Binary files are refused by nxc (it needs UTF-8).
+        LOOT-GATED (NXC_MODE=loot): read-only retrieval (no state change).
+        """
+        if not remote_file:
+            raise ValueError("remote_file is required for nfs_cat_file")
+        return await _nfs_run(
+            get_config, ["--cat", remote_file], targets, offensive=True, dump=True,
+            share=share, port=port, nfs_timeout=nfs_timeout,
+        )
 
     @mcp.tool()
     async def nfs_get_file(
