@@ -1,6 +1,6 @@
 name: Publish to PyPI
 
-# Publishes netexec-mcp to PyPI when a GitHub Release is published.
+# Publishes netexec-mcp to PyPI when a version tag (v*) is pushed.
 # Uses PyPI Trusted Publishing (OIDC) — no API token is stored in the repo.
 #
 # One-time setup on PyPI (https://pypi.org/manage/account/publishing/):
@@ -12,8 +12,9 @@ name: Publish to PyPI
 # For a brand-new project name, add it as a "pending publisher" before the first run.
 
 on:
-  release:
-    types: [published]
+  push:
+    tags:
+      - 'v*'
 
 jobs:
   build:
