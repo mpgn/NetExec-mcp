@@ -4,7 +4,7 @@ Every tool funnels through :func:`executor.execute`, so scope/cap/offensive
 guardrails and the audit log apply uniformly. The surface spans:
 
   * **Read-only enumeration** (``offensive=False``) -- auth check, users/groups/
-    computers, DC list, domain SID, password policy/PSO, AD attack-path recon
+    OUs/computers, DC list, domain SID, password policy/PSO, AD attack-path recon
     (delegation, PASSWD_NOTREQD, adminCount), custom LDAP query, BloodHound
     collection, and gMSA id->name resolution.
   * **Credential-gathering / offensive** (``offensive=True``, only under
@@ -34,6 +34,8 @@ from ..results import (
     parse_ldap_gmsa,
     parse_ldap_gmsa_id,
     parse_ldap_groups,
+    parse_ldap_ou_users,
+    parse_ldap_ous,
     parse_ldap_principals,
     parse_pass_pol,
     parse_ldap_query,
@@ -266,6 +268,51 @@ def register(mcp, get_config) -> None:
             result["members"] = parse_ldap_group_members(result["stdout"])
         else:
             result["groups"] = parse_ldap_groups(result["stdout"])
+        return result
+
+    @mcp.tool()
+    async def ldap_ous(
+        targets: list[str],
+        ou: str | None = None,
+        username: str | None = None,
+        password: str | None = None,
+        ntlm_hash: str | None = None,
+        domain: str | None = None,
+        kerberos: bool = False,
+        use_kcache: bool = False,
+        cred_id: int | None = None,
+        laps: str | None = None,
+        kdc_host: str | None = None,
+        aes_key: str | None = None,
+        ccache: str | None = None,
+        pfx_cert: str | None = None,
+        pfx_base64: str | None = None,
+        pfx_pass: str | None = None,
+        pem_cert: str | None = None,
+        pem_key: str | None = None,
+        ldap_timeout: int | None = None,
+    ) -> dict:
+        """Enumerate organizational units (`--ous`); pass `ou` to list the users inside one.
+
+        Without `ou`, nxc prints the OU inventory -> parsed into `ous`
+        (`{host, ou, distinguished_name}`). The DN is the useful half: it is the
+        `base_dn` to hand to `ldap_query` to scope a search to that OU.
+
+        With `ou` (the OU's *name*, not its DN), the search is scoped to that OU's
+        baseDN and the users are parsed into `users` (`{host, username, cn}`).
+        Useful for mapping delegation boundaries: which accounts live under an OU
+        tells you who a GPO or an OU-level ACL applies to.
+        """
+        flags = ["--ous"] + ([ou] if ou else [])
+        result = await _ldap_run(
+            get_config, flags, targets, username=username, password=password,
+            ntlm_hash=ntlm_hash, domain=domain, kerberos=kerberos,
+            use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, ldap_timeout=ldap_timeout,
+        )
+        if ou:
+            result["users"] = parse_ldap_ou_users(result["stdout"])
+        else:
+            result["ous"] = parse_ldap_ous(result["stdout"])
         return result
 
     @mcp.tool()

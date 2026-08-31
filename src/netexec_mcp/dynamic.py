@@ -159,11 +159,24 @@ _SYNONYMS = {
 }
 
 
-def _expand(query_lower: str) -> list[str]:
+# Token-EXACT synonyms: matched against whole query words, not as a substring of the
+# query string like `_SYNONYMS`. A short key has to live here: "ou" (the AD abbreviation
+# a model writes for an organizational unit) sits inside "group", "you" and "about", so a
+# substring key would fire on half the corpus. Same additive rule as above -- expansion
+# only ever adds candidates, at the reduced `_SYN_W` weight.
+_TOKEN_SYNONYMS = {
+    "ou": ("ous", "organizational"),
+    "organizational": ("ous", "ou"),
+}
+
+
+def _expand(query_lower: str, tokens: list[str] | None = None) -> list[str]:
     extra: list[str] = []
     for key, toks in _SYNONYMS.items():
         if key in query_lower:
             extra.extend(toks)
+    for tok in tokens or ():
+        extra.extend(_TOKEN_SYNONYMS.get(tok, ()))
     return extra
 
 
@@ -269,7 +282,7 @@ def search_scored(index, query: str, protocol: str | None = None,
     raw = _WORD_RE.findall((query or "").lower())
     tokens = [t for t in raw if t not in _STOPWORDS] or raw   # keep raw if all-stopword
     tokens = [_stem_token(t) for t in tokens]                 # fold admin* -> admin, etc.
-    expanded = list(dict.fromkeys(e for e in _expand(q_join) if e not in tokens))
+    expanded = list(dict.fromkeys(e for e in _expand(q_join, raw) if e not in tokens))
     has_query = bool(raw)
     scored: list[tuple[float, ToolEntry]] = []
     for e in index:

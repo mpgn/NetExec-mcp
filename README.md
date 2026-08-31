@@ -18,7 +18,7 @@ With full mode:
 
 ## Status
 
-**v1 — all 10 nxc protocols, 131 tools** (117 protocol tools + 9 discovery/meta-tools +
+**v1 — all 10 nxc protocols, 128 tools** (114 protocol tools + 9 discovery/meta-tools +
 5 offline workspace-DB readers). SMB, LDAP, WinRM, MSSQL, SSH, RDP, WMI, FTP, NFS, and VNC
 are built out (native flags, credential dumping/gathering, command exec, file transfer, promoted
 high-value `-M` modules, and structured output). The first seven are validated end-to-end against a
@@ -27,7 +27,7 @@ everything; the long tail of nxc `-M` modules is reachable via meta-tools.
 
 ## Built for small / local models
 
-With 131 tools, listing every one to the model would spend ~46k tokens of context
+With 128 tools, listing every one to the model would spend ~46k tokens of context
 before any work starts enough to overflow a small-context (≤8B / 32k) model and to
 make every call on a large one needlessly expensive. So the default `NXC_TOOL_MODE`
 is **`dynamic`**: only a handful of meta-tools are exposed (`nxc_catalog`,
@@ -183,7 +183,7 @@ handlers reject.
 This MCP is a subprocess wrapper and pins no nxc dependency, but its tools/flags are
 verified against a specific nxc build:
 
-> **nxc 1.5.1 "Yippie-Ki-Yay", commit `738b842a`** (`738b842a…`, 2026-07-31, build 595)
+> **nxc 1.5.1 "Yippie-Ki-Yay", commit `2bdc7e5e`** (`2bdc7e5e…`, 2026-08-30, build 677)
 
 Check your local build with `nxc --version` (it prints `version - codename - commit - build`).
 nxc moves fast and occasionally moves/removes flags, so when you bump nxc, re-verify the

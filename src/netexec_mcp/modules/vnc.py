@@ -11,7 +11,8 @@ validation and screen capture -- both read-only:
 but VNC has **no username** -- only a password (the handler ignores the username and
 uses NONE auth when the password is empty). So these tools take only ``password``
 (plus stored ``cred_id``); there is no domain/hash/Kerberos/certificate. Transport
-knobs ``--port`` (5900) / ``--vnc-sleep`` (rate-limit avoidance) are exposed.
+knobs ``--port`` (5900) / ``--vnc-sleep`` (rate-limit avoidance) / ``--vnc-timeout``
+(socket + RFB-handshake deadline, default 5s) are exposed.
 
 *(No live lab was available; source-verified against ``proto_args.py`` + handler and
 unit-tested, but not validated end-to-end.)*
@@ -30,6 +31,7 @@ async def _vnc_run(
     offensive: bool = False,
     port=None,
     vnc_sleep=None,
+    vnc_timeout=None,
     password=None,
     cred_id=None,
 ) -> dict:
@@ -44,6 +46,8 @@ async def _vnc_run(
         transport += ["--port", str(port)]
     if vnc_sleep is not None:
         transport += ["--vnc-sleep", str(vnc_sleep)]
+    if vnc_timeout is not None:
+        transport += ["--vnc-timeout", str(vnc_timeout)]
     extra = auth + transport + list(action_flags)
     outcome = await execute(get_config(), "vnc", targets, extra, offensive=offensive)
     return outcome.to_dict()
@@ -60,17 +64,21 @@ def register(mcp, get_config) -> None:
         password: str | None = None,
         port: int | None = None,
         vnc_sleep: int | None = None,
+        vnc_timeout: int | None = None,
         cred_id: int | None = None,
     ) -> dict:
         """Verify VNC authentication (bare `nxc vnc <targets>`).
 
         VNC has no username -- pass just the `password` (reports `Pwn3d!` on a successful
         connection), or a stored `cred_id`. `port` overrides 5900; `vnc_sleep` adds a delay
-        on connect to avoid server rate-limiting.
+        on connect to avoid server rate-limiting; `vnc_timeout` bounds the connection
+        (default 5s) -- raise it for a slow server, since a host that answers the TCP
+        connect and then stalls in the RFB handshake is reported as a timeout, not as a
+        rejected password.
         """
         return await _vnc_run(
             get_config, [], targets, password=password, port=port, vnc_sleep=vnc_sleep,
-            cred_id=cred_id,
+            vnc_timeout=vnc_timeout, cred_id=cred_id,
         )
 
     @mcp.tool()
@@ -80,17 +88,19 @@ def register(mcp, get_config) -> None:
         password: str | None = None,
         port: int | None = None,
         vnc_sleep: int | None = None,
+        vnc_timeout: int | None = None,
         cred_id: int | None = None,
     ) -> dict:
         """Screenshot the VNC desktop on a successful connection (`--screenshot`). Read-only.
 
         `screentime` is how long to wait for the desktop image (`--screentime`, default 5s).
         The PNG is saved on the nxc host (`~/.nxc/screenshots`); the output reports its path.
+        `vnc_timeout` bounds the connection (default 5s).
         """
         flags = ["--screenshot"]
         if screentime is not None:
             flags += ["--screentime", str(screentime)]
         return await _vnc_run(
             get_config, flags, targets, password=password, port=port, vnc_sleep=vnc_sleep,
-            cred_id=cred_id,
+            vnc_timeout=vnc_timeout, cred_id=cred_id,
         )
