@@ -416,6 +416,131 @@ def register(mcp, get_config) -> None:
         return result
 
     @mcp.tool()
+    async def mssql_dpapi(
+        targets: list[str],
+        port: int | None = None,
+        mssql_timeout: int | None = None,
+        username: str | None = None,
+        password: str | None = None,
+        ntlm_hash: str | None = None,
+        domain: str | None = None,
+        local_auth: bool = False,
+        kerberos: bool = False,
+        use_kcache: bool = False,
+        cred_id: int | None = None,
+        kdc_host: str | None = None,
+        aes_key: str | None = None,
+        ccache: str | None = None,
+        pfx_cert: str | None = None,
+        pfx_base64: str | None = None,
+        pfx_pass: str | None = None,
+        pem_cert: str | None = None,
+        pem_key: str | None = None,
+        modes: list[str] | None = None,
+        mkfile: str | None = None,
+        pvk: str | None = None,
+    ) -> dict:
+        """Dump DPAPI-protected secrets via MSSQL (`--dpapi`).
+
+        `modes` is an optional list of nxc `--dpapi` values: `cookies` (also dump
+        browser cookies) and/or `nosystem` (skip SYSTEM DPAPI). `mkfile` supplies a
+        masterkey file (`{GUID}:SHA1`) and `pvk` a domain backup key for offline
+        masterkey decryption. CREDENTIAL-DUMPING (NXC_MODE=loot or full): harvests
+        stored credential material via command execution (needs `sysadmin`).
+        """
+        flags = ["--dpapi"]
+        if modes:
+            for m in modes:
+                if m not in ("cookies", "nosystem"):
+                    raise ValueError("dpapi modes must be 'cookies' and/or 'nosystem'")
+            flags += modes
+        extra: list[str] = []
+        if mkfile:
+            extra += ["--mkfile", mkfile]
+        if pvk:
+            extra += ["--pvk", pvk]
+        return await _mssql_run(
+            get_config, flags, targets, offensive=True, dump=True, extra_flags=extra, port=port,
+            mssql_timeout=mssql_timeout, username=username, password=password,
+            ntlm_hash=ntlm_hash, domain=domain, local_auth=local_auth, kerberos=kerberos,
+            use_kcache=use_kcache, cred_id=cred_id, kdc_host=kdc_host, aes_key=aes_key,
+            ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass,
+            pem_cert=pem_cert, pem_key=pem_key,
+        )
+
+    @mcp.tool()
+    async def mssql_db_hash(
+        targets: list[str],
+        port: int | None = None,
+        mssql_timeout: int | None = None,
+        username: str | None = None,
+        password: str | None = None,
+        ntlm_hash: str | None = None,
+        domain: str | None = None,
+        local_auth: bool = False,
+        kerberos: bool = False,
+        use_kcache: bool = False,
+        cred_id: int | None = None,
+        kdc_host: str | None = None,
+        aes_key: str | None = None,
+        ccache: str | None = None,
+        pfx_cert: str | None = None,
+        pfx_base64: str | None = None,
+        pfx_pass: str | None = None,
+        pem_cert: str | None = None,
+        pem_key: str | None = None,
+    ) -> dict:
+        """Dump local database (SQL login) hashes via MSSQL (`--db-hash`).
+
+        Returns the raw hashes in `stdout`. CREDENTIAL-DUMPING (NXC_MODE=loot or full):
+        read-only, but harvests credential material (needs `sysadmin`).
+        """
+        return await _mssql_run(
+            get_config, ["--db-hash"], targets, offensive=True, dump=True, port=port,
+            mssql_timeout=mssql_timeout, username=username, password=password,
+            ntlm_hash=ntlm_hash, domain=domain, local_auth=local_auth, kerberos=kerberos,
+            use_kcache=use_kcache, cred_id=cred_id, kdc_host=kdc_host, aes_key=aes_key,
+            ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass,
+            pem_cert=pem_cert, pem_key=pem_key,
+        )
+
+    @mcp.tool()
+    async def mssql_list_backups(
+        targets: list[str],
+        port: int | None = None,
+        mssql_timeout: int | None = None,
+        username: str | None = None,
+        password: str | None = None,
+        ntlm_hash: str | None = None,
+        domain: str | None = None,
+        local_auth: bool = False,
+        kerberos: bool = False,
+        use_kcache: bool = False,
+        cred_id: int | None = None,
+        kdc_host: str | None = None,
+        aes_key: str | None = None,
+        ccache: str | None = None,
+        pfx_cert: str | None = None,
+        pfx_base64: str | None = None,
+        pfx_pass: str | None = None,
+        pem_cert: str | None = None,
+        pem_key: str | None = None,
+    ) -> dict:
+        """List database backup paths via MSSQL (`--list-backups`). Read-only.
+
+        Enumerates the on-disk backup file paths the SQL Server instance knows about --
+        useful for locating `.bak` files to loot. Read-only enumeration (recon).
+        """
+        return await _mssql_run(
+            get_config, ["--list-backups"], targets, port=port,
+            mssql_timeout=mssql_timeout, username=username, password=password,
+            ntlm_hash=ntlm_hash, domain=domain, local_auth=local_auth, kerberos=kerberos,
+            use_kcache=use_kcache, cred_id=cred_id, kdc_host=kdc_host, aes_key=aes_key,
+            ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass,
+            pem_cert=pem_cert, pem_key=pem_key,
+        )
+
+    @mcp.tool()
     async def mssql_get_file(
         targets: list[str],
         remote_path: str,

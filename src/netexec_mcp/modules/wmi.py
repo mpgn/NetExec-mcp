@@ -33,6 +33,7 @@ async def _wmi_run(
     targets: list[str],
     *,
     offensive: bool = False,
+    dump: bool = False,
     extra_flags: list[str] | None = None,
     rpc_timeout=None,
     username=None,
@@ -78,7 +79,7 @@ async def _wmi_run(
     if rpc_timeout is not None:
         transport += ["--rpc-timeout", str(rpc_timeout)]
     extra = auth + transport + list(action_flags) + list(extra_flags or [])
-    outcome = await execute(get_config(), "wmi", targets, extra, offensive=offensive, ccache=ccache)
+    outcome = await execute(get_config(), "wmi", targets, extra, offensive=offensive, dump=dump, ccache=ccache)
     return outcome.to_dict()
 
 
@@ -202,7 +203,97 @@ def register(mcp, get_config) -> None:
             pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key,
         )
 
+    # ---- Credential dumping (loot / full) ---- #
+
+    @mcp.tool()
+    async def wmi_dpapi(
+        targets: list[str],
+        rpc_timeout: int | None = None,
+        username: str | None = None,
+        password: str | None = None,
+        ntlm_hash: str | None = None,
+        domain: str | None = None,
+        local_auth: bool = False,
+        kerberos: bool = False,
+        use_kcache: bool = False,
+        cred_id: int | None = None,
+        kdc_host: str | None = None,
+        aes_key: str | None = None,
+        ccache: str | None = None,
+        pfx_cert: str | None = None,
+        pfx_base64: str | None = None,
+        pfx_pass: str | None = None,
+        pem_cert: str | None = None,
+        pem_key: str | None = None,
+        modes: list[str] | None = None,
+        mkfile: str | None = None,
+        pvk: str | None = None,
+    ) -> dict:
+        """Dump DPAPI-protected secrets over WMI (`--dpapi`).
+
+        `modes` is an optional list of nxc `--dpapi` values: only `cookies` is
+        supported on WMI (also dump browser cookies). `mkfile` supplies a masterkey
+        file (`{GUID}:SHA1`) and `pvk` a domain backup key for offline masterkey
+        decryption. CREDENTIAL-DUMPING (NXC_MODE=loot or full): harvests stored
+        credential material.
+        """
+        flags = ["--dpapi"]
+        if modes:
+            for m in modes:
+                if m != "cookies":
+                    raise ValueError("dpapi modes must be 'cookies' on the wmi protocol")
+            flags += modes
+        extra: list[str] = []
+        if mkfile:
+            extra += ["--mkfile", mkfile]
+        if pvk:
+            extra += ["--pvk", pvk]
+        return await _wmi_run(
+            get_config, flags, targets, offensive=True, dump=True, extra_flags=extra,
+            rpc_timeout=rpc_timeout, username=username,
+            password=password, ntlm_hash=ntlm_hash, domain=domain, local_auth=local_auth,
+            kerberos=kerberos, use_kcache=use_kcache, cred_id=cred_id, kdc_host=kdc_host,
+            aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64,
+            pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key,
+        )
+
     # ---- Offensive (NXC_MODE=full only) ---- #
+
+    @mcp.tool()
+    async def wmi_sccm(
+        targets: list[str],
+        rpc_timeout: int | None = None,
+        username: str | None = None,
+        password: str | None = None,
+        ntlm_hash: str | None = None,
+        domain: str | None = None,
+        local_auth: bool = False,
+        kerberos: bool = False,
+        use_kcache: bool = False,
+        cred_id: int | None = None,
+        kdc_host: str | None = None,
+        aes_key: str | None = None,
+        ccache: str | None = None,
+        pfx_cert: str | None = None,
+        pfx_base64: str | None = None,
+        pfx_pass: str | None = None,
+        pem_cert: str | None = None,
+        pem_key: str | None = None,
+    ) -> dict:
+        """Dump SCCM secrets over WMI (`--sccm`). Requires admin.
+
+        This is the WMI counterpart of the SCCM dumping that used to live on
+        `smb_sccm --sccm wmi` before nxc moved it to the wmi protocol. OFFENSIVE-GATED
+        (NXC_MODE=full): extracts credential material.
+        """
+        return await _wmi_run(
+            get_config, ["--sccm"], targets, offensive=True,
+            rpc_timeout=rpc_timeout, username=username,
+            password=password, ntlm_hash=ntlm_hash, domain=domain, local_auth=local_auth,
+            kerberos=kerberos, use_kcache=use_kcache, cred_id=cred_id, kdc_host=kdc_host,
+            aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64,
+            pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key,
+        )
 
     @mcp.tool()
     async def wmi_exec(

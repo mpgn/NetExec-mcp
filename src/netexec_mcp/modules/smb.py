@@ -617,6 +617,7 @@ def register(mcp, get_config) -> None:
         enabled_only: bool = False,
         kerberos_keys: bool = False,
         only_user: str | None = None,
+        just_trust_keys: bool = False,
     ) -> dict:
         """Dump the domain NTDS.dit hashes from a DC (`--ntds`). Requires domain admin.
 
@@ -624,7 +625,10 @@ def register(mcp, get_config) -> None:
         or `vss` (volume shadow copy). `include_history` adds `--history` (password
         history); `enabled_only` adds `--enabled` (skip disabled accounts);
         `kerberos_keys` adds `--kerberos-keys` (also dump AES/DES keys); `only_user`
-        dumps just that account (`--user <name>`).
+        dumps just that account (`--user <name>`). Trusted Domain Object (TDO) trust
+        keys are dumped by default with `--ntds`; `just_trust_keys` adds
+        `--just-trust-keys` to dump ONLY the inter-realm trust keys and skip every
+        account secret.
 
         Returns a structured `credentials` list (`{account, account_type, rid, lm, nt,
         ...}`; `kerberos_key` entries when `kerberos_keys=true`) ready for replay.
@@ -645,6 +649,8 @@ def register(mcp, get_config) -> None:
             extra.append("--kerberos-keys")
         if only_user:
             extra += ["--user", only_user]
+        if just_trust_keys:
+            extra.append("--just-trust-keys")
         result = await _loot_run(
             get_config, flags, targets, extra_flags=extra, username=username,
             password=password, ntlm_hash=ntlm_hash, domain=domain, local_auth=local_auth,
@@ -878,6 +884,51 @@ def register(mcp, get_config) -> None:
         """
         flags = ["--share", share, "--put-file", local_path, remote_path]
         return await _offensive_run(
+            get_config, flags, targets, username=username, password=password,
+            ntlm_hash=ntlm_hash, domain=domain, local_auth=local_auth,
+            kerberos=kerberos, use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key,
+        )
+
+    @mcp.tool()
+    async def smb_get_folder(
+        targets: list[str],
+        share: str,
+        remote_path: str,
+        local_path: str,
+        recursive: bool = True,
+        ignore_empty_folders: bool = False,
+        username: str | None = None,
+        password: str | None = None,
+        ntlm_hash: str | None = None,
+        domain: str | None = None,
+        local_auth: bool = False,
+        kerberos: bool = False,
+        use_kcache: bool = False,
+        cred_id: int | None = None,
+        laps: str | None = None,
+        kdc_host: str | None = None,
+        aes_key: str | None = None,
+        ccache: str | None = None,
+        pfx_cert: str | None = None,
+        pfx_base64: str | None = None,
+        pfx_pass: str | None = None,
+        pem_cert: str | None = None,
+        pem_key: str | None = None,
+    ) -> dict:
+        """Download a remote directory from an SMB share (`--share <share> --get-folder <remote> <local>`).
+
+        `remote_path` is the directory on `share`; its contents are written under
+        `local_path` on the nxc host. `recursive` (default true) walks subdirectories --
+        set it false to add `--no-recursive`; `ignore_empty_folders` adds
+        `--ignore-empty-folders` to skip empty directories. LOOT-GATED (NXC_MODE=loot):
+        read-only retrieval that harvests data from the target (no state change).
+        """
+        flags = ["--share", share, "--get-folder", remote_path, local_path]
+        if not recursive:
+            flags.append("--no-recursive")
+        if ignore_empty_folders:
+            flags.append("--ignore-empty-folders")
+        return await _loot_run(
             get_config, flags, targets, username=username, password=password,
             ntlm_hash=ntlm_hash, domain=domain, local_auth=local_auth,
             kerberos=kerberos, use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key,
@@ -1258,7 +1309,6 @@ def register(mcp, get_config) -> None:
     @mcp.tool()
     async def smb_sccm(
         targets: list[str],
-        method: str | None = None,
         username: str | None = None,
         password: str | None = None,
         ntlm_hash: str | None = None,
@@ -1279,14 +1329,12 @@ def register(mcp, get_config) -> None:
     ) -> dict:
         """Dump SCCM secrets from the target (`--sccm`). Requires admin.
 
-        `method` is `disk` (default) or `wmi`. OFFENSIVE-GATED (NXC_MODE=full):
-        extracts credential material.
+        OFFENSIVE-GATED (NXC_MODE=full): extracts credential material. Upstream
+        turned `--sccm` into a plain flag (PR #1327, merged 2026-09-13): the old
+        `disk`/`wmi` selector is gone and WMI-based SCCM dumping now lives on the
+        `wmi` protocol.
         """
         flags = ["--sccm"]
-        if method is not None:
-            if method not in ("disk", "wmi"):
-                raise ValueError("method must be 'disk' or 'wmi'")
-            flags.append(method)
         return await _offensive_run(
             get_config, flags, targets, username=username, password=password,
             ntlm_hash=ntlm_hash, domain=domain, local_auth=local_auth,

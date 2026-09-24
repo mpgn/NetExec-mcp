@@ -90,6 +90,28 @@ def register(mcp, get_config) -> None:
     # ---- Offensive (NXC_MODE=full only) ---- #
 
     @mcp.tool()
+    async def ftp_cat(
+        targets: list[str],
+        remote_file: str,
+        port: int | None = None,
+        username: str | None = None,
+        password: str | None = None,
+        cred_id: int | None = None,
+    ) -> dict:
+        """Display the contents of a file on the FTP server (`--cat <file>`).
+
+        `remote_file` is the path on the server; nxc streams its contents to stdout
+        without saving anything locally. OFFENSIVE-GATED (NXC_MODE=full): retrieves
+        arbitrary file contents from the target, like `ftp_get`.
+        """
+        if not remote_file or not remote_file.strip():
+            raise ValueError("remote_file is required for ftp_cat")
+        return await _ftp_run(
+            get_config, ["--cat", remote_file], targets, offensive=True, port=port,
+            username=username, password=password, cred_id=cred_id,
+        )
+
+    @mcp.tool()
     async def ftp_get(
         targets: list[str],
         remote_file: str,

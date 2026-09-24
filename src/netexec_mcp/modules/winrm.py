@@ -254,15 +254,32 @@ def register(mcp, get_config) -> None:
         local_auth: bool = False,
         cred_id: int | None = None,
         laps: str | None = None,
+        modes: list[str] | None = None,
+        mkfile: str | None = None,
+        pvk: str | None = None,
     ) -> dict:
-        """Dump the user's Credential Manager / DPAPI secrets over WinRM (`--dpapi`).
+        """Dump DPAPI-protected secrets over WinRM (`--dpapi`).
 
-        OFFENSIVE-GATED (NXC_MODE=full): retrieves stored credential material. Decrypts
-        masterkeys with the supplied password, so it needs plaintext creds for the user
-        whose secrets are looted.
+        `modes` is an optional list of nxc `--dpapi` values: `cookies` (also dump
+        browser cookies) and/or `nosystem` (skip SYSTEM DPAPI). `mkfile` supplies a
+        masterkey file (`{GUID}:SHA1`) and `pvk` a domain backup key for offline
+        masterkey decryption. CREDENTIAL-DUMPING (NXC_MODE=loot or full): retrieves
+        stored credential material; decrypting user masterkeys needs the user's
+        plaintext creds.
         """
+        flags = ["--dpapi"]
+        if modes:
+            for m in modes:
+                if m not in ("cookies", "nosystem"):
+                    raise ValueError("dpapi modes must be 'cookies' and/or 'nosystem'")
+            flags += modes
+        extra: list[str] = []
+        if mkfile:
+            extra += ["--mkfile", mkfile]
+        if pvk:
+            extra += ["--pvk", pvk]
         return await _winrm_run(
-            get_config, ["--dpapi"], targets, offensive=True, dump=True, port=port,
+            get_config, flags, targets, offensive=True, dump=True, extra_flags=extra, port=port,
             check_proto=check_proto, http_timeout=http_timeout, username=username,
             password=password, ntlm_hash=ntlm_hash, domain=domain, local_auth=local_auth,
             cred_id=cred_id, laps=laps,
