@@ -123,8 +123,17 @@ Four escalating levels of how much the server is allowed to *do*:
 | `NXC_TIMEOUT` | Per-call timeout (seconds). | `300` |
 | `NXC_MAX_TARGETS` | Max target tokens per call. | `256` |
 | `NXC_AUDIT_LOG` | Path to an append-only JSONL audit log. | _(none)_ |
-| `NXC_WORKSPACE` | nxc workspace to read for richer results. | _(none — reads nxc.conf's `workspace`, else `default`)_ |
-| `NXC_PATH` | Override nxc's home dir (mirrors nxc's own `NXC_PATH`); where `nxc.conf` and `workspaces/` are read from. | `~/.nxc` |
+| `NXC_WORKSPACE` | nxc workspace the `workspace_*` readers look in. **Read-side only** — it does _not_ change where nxc writes (nxc takes its workspace from `nxc.conf`, which this does not touch). To isolate a run, set `NXC_PATH`, not this. | _(none — reads nxc.conf's `workspace`, else `default`)_ |
+| `NXC_PATH` | Override nxc's home dir (mirrors nxc's own `NXC_PATH`). Inherited by the nxc subprocess, so it sets where nxc **writes** (`nxc.conf`, `workspaces/*.db`) **and** where the MCP **reads** — both sides agree on one home. | `~/.nxc` |
+
+> **Per-run isolation (one lab per run).** Give each run a unique `NXC_PATH`
+> (e.g. `NXC_PATH=/runs/lab-x`) and that run gets its own nxc home: nxc writes
+> its `workspaces/` there and the `workspace_*` readers read from the same place,
+> so reads and writes always coincide with **zero shared state**. Separate homes
+> never collide, so runs may execute **concurrently** without racing on
+> `nxc.conf`. Confirm the active home at any time via `nxc_health` (`nxc_home` +
+> `workspace` fields). Tear a run down by deleting its directory. A fresh home is
+> initialised by nxc on first use (it creates `nxc.conf` and the per-protocol DBs).
 
 > **Dynamic mode needs a bigger client-side step budget.** `max_steps` (how many tool
 > calls the agent may make) is **not** an MCP setting — the server can't see or set it.
