@@ -11,12 +11,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 
 from fastmcp import FastMCP
 from fastmcp.server.middleware import Middleware
 
-from .config import Config, ConfigError
+from .config import Config, ConfigError, nxc_home
 from .executor import _folded_args, parse_version, reset_current_tool, run, set_current_tool
 from . import dynamic, meta, resources
 from .modules import register_enabled, workspace
@@ -126,6 +127,9 @@ def _check_version(config: Config) -> dict:
             "base_command": config.base_command,
             "returncode": None,
             "error": f"Executable not found: {config.base_command[0]!r}",
+            # Surfaced even on failure so an operator can see WHERE we looked.
+            "nxc_home": str(nxc_home()),
+            "workspace": config.workspace,
         }
 
     version = parse_version(result.stdout) or parse_version(result.stderr)
@@ -142,6 +146,13 @@ def _check_version(config: Config) -> dict:
         "base_command": config.base_command,
         "returncode": result.returncode,
         "detail": last_line,
+        # The resolved nxc home (honors NXC_PATH) and the active workspace. These
+        # pin down WHERE nxc writes and where our workspace_* reads look, so an
+        # agent running one isolated home per lab/run can confirm the isolation
+        # (e.g. NXC_PATH=/runs/lab-x -> nxc_home ".../lab-x"). See the per-run
+        # isolation note in the README.
+        "nxc_home": str(nxc_home()),
+        "workspace": config.workspace,
     }
 
 
@@ -150,7 +161,10 @@ def nxc_health() -> dict:
     """Report the configured NetExec base command and its --version output.
 
     Returns a dict with `ok`, the parsed `version`, the resolved `base_command`,
-    the process `returncode`, and the raw version `detail` line.
+    the process `returncode`, the raw version `detail` line, the resolved
+    `nxc_home` (honors NXC_PATH), and the active `workspace`. The last two let an
+    agent confirm per-run isolation: launch the server with a unique NXC_PATH per
+    lab/run and each run reads and writes its own nxc home.
     """
     return _check_version(get_config())
 
@@ -235,7 +249,14 @@ def main() -> None:
     else:
         _warn_if_surface_too_large(mcp)
 
-    mcp.run()
+    # Suppress FastMCP's startup banner (v4+) by default -- it is cosmetic noise that
+    # clutters the client's server log on every launch. Re-enable with
+    # FASTMCP_SHOW_SERVER_BANNER=true. (Passing show_banner explicitly bypasses
+    # FastMCP's own reading of that env var, so we read it here ourselves.)
+    show_banner = os.environ.get("FASTMCP_SHOW_SERVER_BANNER", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+    mcp.run(show_banner=show_banner)
 
 
 if __name__ == "__main__":

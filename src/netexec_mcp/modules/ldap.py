@@ -778,8 +778,9 @@ def register(mcp, get_config) -> None:
     ) -> dict:
         """AS-REP roast: collect crackable hashes for users without Kerberos pre-auth (`--asreproast <file>`).
 
-        Hashes are written to `output_file` (on the nxc host) and printed. OFFENSIVE-GATED
-        (NXC_MODE=full): gathers crackable credential material.
+        Hashes are written to `output_file` (on the nxc host) and printed. CREDENTIAL-DUMP
+        (NXC_MODE=loot): read-only collection of crackable credential material, no state
+        change on the target.
         """
         result = await _ldap_run(
             get_config, ["--asreproast", output_file], targets, offensive=True, dump=True,
@@ -815,8 +816,9 @@ def register(mcp, get_config) -> None:
         """Kerberoast: collect crackable TGS hashes for SPN accounts (`--kerberoasting <file>`).
 
         Pass `accounts` to target specific sAMAccountNames (`--kerberoast-account`).
-        Hashes are written to `output_file`. OFFENSIVE-GATED (NXC_MODE=full): gathers
-        crackable credential material.
+        Hashes are written to `output_file`. CREDENTIAL-DUMP (NXC_MODE=loot): read-only
+        collection of crackable credential material, no state change on the target.
+        Contrast `ldap_targeted_kerberoast`, which WRITES an SPN and needs full.
         """
         extra = ["--kerberoast-account", *accounts] if accounts else []
         result = await _ldap_run(
@@ -857,7 +859,7 @@ def register(mcp, get_config) -> None:
         if not accounts:
             raise ValueError("accounts is required for ldap_targeted_kerberoast")
         result = await _ldap_run(
-            get_config, ["--targeted-kerberoast", *accounts], targets, offensive=True, dump=True,
+            get_config, ["--targeted-kerberoast", *accounts], targets, offensive=True,
             username=username, password=password, ntlm_hash=ntlm_hash, domain=domain,
             kerberos=kerberos, use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, ldap_timeout=ldap_timeout,
         )
