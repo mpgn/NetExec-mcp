@@ -74,6 +74,20 @@ def nxc_workspace_dir() -> Path:
     return nxc_home() / "workspaces"
 
 
+def loot_dir() -> Path:
+    """Per-run loot dir under the nxc home (NXC_PATH-isolated). Default output location for the
+    roasting tools' hash files."""
+    return nxc_home() / "loot"
+
+
+def resolve_downloads_dir(cfg) -> Path:
+    """ABSOLUTE dir where retrieved files land: the configured ``downloads_dir`` if set, else
+    ``<nxc_home>/downloads`` (NXC_PATH-isolated per run). A relative config value is made
+    absolute (abspath) so nxc never writes into its own cwd -- the whole point of fix #7."""
+    d = getattr(cfg, "downloads_dir", None)
+    return Path(os.path.abspath(os.path.expanduser(d))) if d else (nxc_home() / "downloads")
+
+
 # nxc's own fallbacks when nxc.conf is absent or a key is unset.
 _NXC_CONF_DEFAULTS = {"pwn3d_label": "Pwn3d!", "workspace": "default"}
 
@@ -193,6 +207,10 @@ class Config:
     # agent via the auth guide; the MCP itself keys auth on the `[+]` marker, which
     # nxc does not make configurable.
     pwn3d_label: str = "Pwn3d!"
+    # Where smb_get_file/smb_get_folder write retrieved files (NXC_DOWNLOADS_DIR). None ->
+    # <nxc_home>/downloads, which is NXC_PATH-isolated per run. Added last with a default so
+    # existing Config(**...) constructions in tests keep working.
+    downloads_dir: str | None = None
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -216,4 +234,5 @@ class Config:
             mode=mode,
             tool_mode=_resolve_tool_mode(),
             pwn3d_label=conf["pwn3d_label"],
+            downloads_dir=os.environ.get("NXC_DOWNLOADS_DIR") or None,
         )

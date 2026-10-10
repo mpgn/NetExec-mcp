@@ -83,11 +83,17 @@ class NormalizeArgsMiddleware(Middleware):
                     changed = True
                 except (ValueError, TypeError):
                     pass
-            strays = {k: v for k, v in a.items() if k not in ("name", "arguments")}
+            # First-class nxc_call params (targets/username/password/domain) are declared kwargs,
+            # not strays: leave them top-level for nxc_call to fold silently (no nag).
+            strays = {k: v for k, v in a.items()
+                      if k not in ("name", "arguments") and k not in dynamic.NXC_CALL_FIRST_CLASS}
             if strays and "name" in a:
                 inner = a.get("arguments")
                 inner = dict(inner) if isinstance(inner, dict) else {}
-                a = {"name": a["name"], "arguments": {**strays, **inner}}
+                # Preserve first-class top-level params (targets/...) in place; fold only the
+                # genuine strays. (A bare rebuild to {name, arguments} would drop them.)
+                kept = {k: v for k, v in a.items() if k in dynamic.NXC_CALL_FIRST_CLASS}
+                a = {"name": a["name"], **kept, "arguments": {**strays, **inner}}
                 changed = True
                 token = _folded_args.set(sorted(strays))
             if changed:
@@ -98,6 +104,15 @@ class NormalizeArgsMiddleware(Middleware):
                 and ("properties" in args or "additionalProperties" in args)
                 and set(args) <= _SCHEMA_ECHO_KEYS):
             msg.arguments = {}
+            args = {}
+        # (3) wrapper bleed: the dynamic-mode `arguments` convention leaks onto SIBLING tools.
+        # A zero-arg/other tool called as {"arguments": {...}} would pydantic-reject as
+        # extra_forbidden (nxc_health was the #1 retry victim fleet-wide), so unwrap it. nxc_call
+        # itself legitimately takes `arguments`, so it is exempt.
+        if (isinstance(args, dict) and getattr(msg, "name", None) != "nxc_call"
+                and set(args) == {"arguments"}):
+            inner = args.get("arguments")
+            msg.arguments = dict(inner) if isinstance(inner, dict) else {}
         try:
             return await call_next(context)
         finally:
@@ -236,14 +251,20 @@ def main() -> None:
         # Snapshot the full tool surface BEFORE installing the hiding middleware -- the
         # middleware filters the server's own list_tools too (see dynamic.py).
         full_tools = asyncio.run(mcp.list_tools())
-        index = dynamic.build_index(full_tools)
+        # Collect the nxc -M module catalog (one -L per enabled protocol) so the long-tail
+        # modules (raisechild, ticketer, nopac, ...) are searchable via nxc_find_tool and
+        # route to nxc_run_module -- otherwise they are invisible to discovery.
+        modules = asyncio.run(meta.collect_module_catalog(get_config, config.protocols))
+        index = dynamic.build_index(full_tools, modules)
         dynamic.register(mcp, get_config, index)
         mcp.add_middleware(dynamic.DynamicModeMiddleware())
         mcp.instructions = dynamic.DYNAMIC_INSTRUCTIONS
+        n_tools = sum(1 for e in index if e.kind == "tool")
+        n_modules = sum(1 for e in index if e.kind == "module")
         print(
-            f"[netexec-mcp] tool mode: dynamic (default) -- {len(index)} tools behind "
-            f"{len(dynamic.DYNAMIC_VISIBLE)} meta-tools; discover via nxc_find_tool/nxc_catalog, "
-            f"run via nxc_call. Set NXC_TOOL_MODE=static to expose every tool.",
+            f"[netexec-mcp] tool mode: dynamic (default) -- {n_tools} tools (+{n_modules} -M "
+            f"modules) behind {len(dynamic.DYNAMIC_VISIBLE)} meta-tools; discover via "
+            f"nxc_find_tool/nxc_catalog, run via nxc_call. Set NXC_TOOL_MODE=static to expose every tool.",
             file=sys.stderr,
         )
     else:

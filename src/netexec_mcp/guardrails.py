@@ -200,6 +200,40 @@ def check_offensive(
     )
 
 
+# A full-gated tool whose intent HAS a read-only sibling -> name it instead of the generic
+# "a read-only tool likely exists" (which misroutes the agent off a confirmed path).
+READ_ONLY_SIBLINGS = {
+    # verified against modules/mssql.py (mssql_enum_db does NOT exist)
+    "mssql_query": ["mssql_enum_logins", "mssql_enum_impersonate", "mssql_database"],
+}
+# Full-gated primitives with NO read-only equivalent: the agent must NOT go hunting for one.
+# Every name verified to be a registered, full-gated tool.
+_NO_ANALOG_EXACT = frozenset({
+    "smb_put_file", "mssql_put_file", "ldap_targeted_kerberoast",
+    "smb_delegate", "smb_coerce_plus", "nxc_run_module", "nxc_raw_command",
+})
+
+
+def has_no_readonly_analog(tool: str | None) -> bool:
+    return bool(tool) and tool in _NO_ANALOG_EXACT
+
+
+def offensive_block_detail(tool: str | None) -> str:
+    """A tool-aware lead for a FULL-gated (non-dump) refusal. Names a concrete read-only sibling
+    when one exists; else says plainly there is no read-only equivalent (don't search); else the
+    soft generic line. Keeps the agent from looping on a search for a tool that cannot exist."""
+    if tool and tool in READ_ONLY_SIBLINGS:
+        sibs = ", ".join(READ_ONLY_SIBLINGS[tool])
+        return (f"{tool} is offensive (write/exec) and is blocked. For read-only enumeration of "
+                f"the same thing use instead: {sibs}.")
+    if has_no_readonly_analog(tool):
+        return (f"{tool} is an offensive primitive with NO read-only equivalent -- do NOT search "
+                f"for an alternative tool; it simply requires a higher mode.")
+    return ("this action is offensive (exec/write/spray/exploit) and is blocked. If you only need "
+            "read-only enumeration, a dedicated non-gated tool may exist -- find it with "
+            "nxc_find_tool; do not guess.")
+
+
 def check_target_cap(targets: list[str], max_targets: int) -> None:
     if len(targets) > max_targets:
         raise TooManyTargets(

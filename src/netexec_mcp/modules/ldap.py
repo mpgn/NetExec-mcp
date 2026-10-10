@@ -20,9 +20,11 @@ slow or high-latency DCs where the aggressive default trips a false connection e
 
 from __future__ import annotations
 
+import os
 import re
 
 from ..auth import build_auth_flags
+from ..config import loot_dir
 from ..executor import execute
 from ..results import (
     decode_attributes,
@@ -45,6 +47,21 @@ from ..results import (
 )
 
 _ATTR_SPLIT_RE = re.compile(r"[,;\s]+")
+
+
+def _roast_output(get_config, output_file, kind: str) -> str:
+    """Resolve a roast hash-file path. Default: ``<loot_dir>/<kind>.txt`` (NXC_PATH-isolated per
+    run); an explicit path is used as-is. Creates the parent dir when actually executing so the
+    first call succeeds. Returns the resolved absolute path."""
+    cfg = get_config()
+    path = (os.path.expanduser(output_file) if output_file
+            else os.path.join(str(loot_dir()), f"{kind}.txt"))
+    # Create the loot dir only for a call that will actually run (roasting is loot-gated), so a
+    # recon-mode refusal leaves no stray dir.
+    gated_ok = getattr(cfg, "allow_loot", False) or getattr(cfg, "allow_offensive", False)
+    if not getattr(cfg, "dry_run", False) and gated_ok:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    return path
 
 
 def _normalize_attributes(attributes: list[str] | str | None) -> list[str]:
@@ -720,6 +737,7 @@ def register(mcp, get_config) -> None:
     async def ldap_bloodhound(
         targets: list[str],
         collection: str = "Default",
+        dns_server: str | None = None,
         username: str | None = None,
         password: str | None = None,
         ntlm_hash: str | None = None,
@@ -742,22 +760,31 @@ def register(mcp, get_config) -> None:
 
         `collection` is one or more (comma-separated) of: Group, LocalAdmin, Session,
         Trusts, Default, DCOnly, DCOM, RDP, PSRemote, LoggedOn, Container, ObjectProps,
-        ACL, ADCS, All. Read-only: collects AD data to a local zip on the nxc host.
-        The default collector is BloodHound CE (nxc build >= 595); legacy-format output
-        is selected via nxc's config file, not a flag.
+        ACL, ADCS, All. `dns_server` (`--dns-server`) fixes "Could not find a domain
+        controller" DNS-resolution failures -- pass the in-scope DC IP. Read-only: collects
+        AD data to a local zip on the nxc host. The default collector is BloodHound CE
+        (nxc build >= 595); legacy-format output is selected via nxc's config file, not a flag.
         """
-        return await _ldap_run(
-            get_config, ["--bloodhound", "-c", collection], targets, username=username,
+        flags = ["--bloodhound", "-c", collection]
+        if dns_server:
+            flags += ["--dns-server", dns_server]
+        result = await _ldap_run(
+            get_config, flags, targets, username=username,
             password=password, ntlm_hash=ntlm_hash, domain=domain, kerberos=kerberos,
             use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, ldap_timeout=ldap_timeout,
         )
+        if not dns_server and "could not find a domain controller" in (result.get("stdout") or "").lower():
+            dc = targets[0] if targets else "<DC IP>"
+            result["dns_hint"] = (f"BloodHound could not resolve the DC. Retry with "
+                                  f"dns_server={dc!r} (the in-scope DC IP).")
+        return result
 
     # ---- Credential gathering / offensive (NXC_MODE=full only) ---- #
 
     @mcp.tool()
     async def ldap_asreproast(
         targets: list[str],
-        output_file: str,
+        output_file: str | None = None,
         username: str | None = None,
         password: str | None = None,
         ntlm_hash: str | None = None,
@@ -778,22 +805,25 @@ def register(mcp, get_config) -> None:
     ) -> dict:
         """AS-REP roast: collect crackable hashes for users without Kerberos pre-auth (`--asreproast <file>`).
 
-        Hashes are written to `output_file` (on the nxc host) and printed. CREDENTIAL-DUMP
+        `output_file` is OPTIONAL (default `<nxc_home>/loot/asreproast.txt`); the parsed hashes
+        are returned inline in `hashes` and the resolved path in `output_file`. CREDENTIAL-DUMP
         (NXC_MODE=loot): read-only collection of crackable credential material, no state
         change on the target.
         """
+        output_file = _roast_output(get_config, output_file, "asreproast")
         result = await _ldap_run(
             get_config, ["--asreproast", output_file], targets, offensive=True, dump=True,
             username=username, password=password, ntlm_hash=ntlm_hash, domain=domain,
             kerberos=kerberos, use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, ldap_timeout=ldap_timeout,
         )
         result["hashes"] = parse_roast_hashes(result["stdout"])
+        result["output_file"] = output_file
         return result
 
     @mcp.tool()
     async def ldap_kerberoast(
         targets: list[str],
-        output_file: str,
+        output_file: str | None = None,
         accounts: list[str] | None = None,
         username: str | None = None,
         password: str | None = None,
@@ -816,10 +846,12 @@ def register(mcp, get_config) -> None:
         """Kerberoast: collect crackable TGS hashes for SPN accounts (`--kerberoasting <file>`).
 
         Pass `accounts` to target specific sAMAccountNames (`--kerberoast-account`).
-        Hashes are written to `output_file`. CREDENTIAL-DUMP (NXC_MODE=loot): read-only
-        collection of crackable credential material, no state change on the target.
-        Contrast `ldap_targeted_kerberoast`, which WRITES an SPN and needs full.
+        `output_file` is OPTIONAL (default `<nxc_home>/loot/kerberoast.txt`); parsed hashes
+        return inline in `hashes`, the resolved path in `output_file`. CREDENTIAL-DUMP
+        (NXC_MODE=loot): read-only collection of crackable credential material, no state
+        change on the target. Contrast `ldap_targeted_kerberoast`, which WRITES an SPN and needs full.
         """
+        output_file = _roast_output(get_config, output_file, "kerberoast")
         extra = ["--kerberoast-account", *accounts] if accounts else []
         result = await _ldap_run(
             get_config, ["--kerberoasting", output_file], targets, offensive=True, dump=True,
@@ -827,6 +859,7 @@ def register(mcp, get_config) -> None:
             domain=domain, kerberos=kerberos, use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, ldap_timeout=ldap_timeout,
         )
         result["hashes"] = parse_roast_hashes(result["stdout"])
+        result["output_file"] = output_file
         return result
 
     @mcp.tool()

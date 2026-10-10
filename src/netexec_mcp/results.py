@@ -45,6 +45,59 @@ class StatusRecord:
     host: str | None = None
     port: int | None = None
     hostname: str | None = None
+    # On `[+]` auth lines only: "pwned" (privilege label), "guest_fallback" ((Guest) -- the
+    # credential is INVALID, the server granted a guest/null session), or "valid". None else.
+    auth: str | None = None
+    # On `[-]`/`[!]` lines carrying a known TERMINAL signature (a ticket/credential that will
+    # never work as-is): "auth_error" | "op_error". None otherwise.
+    error_class: str | None = None
+    terminal: bool = False
+
+
+# Trailing "(...)" privilege qualifier on an auth line, e.g. "(Pwn3d!)" / "(Guest)".
+_TRAILING_QUAL_RE = re.compile(r"\(([^)]+)\)\s*$")
+# A real auth line starts with `user:` (AD form `DOMAIN\user:`, or a bare `user:` for SSH/FTP/
+# VNC). The leading `[^:\s]+:` (no space before the colon) still excludes non-auth `[+]` lines
+# like "[+] Response for object:" (space before the colon) and "[+] Dumping ...".
+_AUTH_CRED_RE = re.compile(r"^[^:\s]+:")
+# Terminal failure signatures: the ticket/credential will NOT work on a plain retry (re-forge
+# or change credential). Conservative: NO bare STATUS_ACCESS_DENIED (benign, e.g. a guest that
+# cannot list shares), and NO transient errors -- KRB_AP_ERR_SKEW (fix the clock) and
+# STATUS_ACCOUNT_LOCKED_OUT (unlocks after the lockout window) are deliberately excluded.
+_TERMINAL_SIGNATURES = (
+    ("auth_error", re.compile(
+        r"KDC_ERR_(?:TGT_REVOKED|WRONG_REALM|CLIENT_REVOKED|C_PRINCIPAL_UNKNOWN|PREAUTH_FAILED)"
+        r"|WRONG_REALM|STATUS_USER_SESSION_DELETED"
+        r"|STATUS_ACCOUNT_DISABLED|STATUS_PASSWORD_EXPIRED|KRB_AP_ERR_MODIFIED", re.I)),
+    ("op_error", re.compile(r"rpc_s_access_denied|DRSUAPI.*denied|DCSync.*denied", re.I)),
+)
+# A saved Kerberos ticket (getST/S4U/ticketer): a real success even when sibling hosts fail.
+# Requires the save VERB (no bare `.ccache` catch-all, which matched any line merely NAMING a
+# cache path -- incl. a failure line -- and falsely flipped a terminal error to "success").
+_TICKET_SAVED_RE = re.compile(r"sav(?:ed|ing)\b.*(?:\.ccache|\.kirbi|ticket)", re.I)
+
+
+def _auth_label(marker: str, message: str, pwn3d_label: str) -> str | None:
+    """Classify a `[+]` auth line. See StatusRecord.auth."""
+    if marker != "+":
+        return None
+    m = _TRAILING_QUAL_RE.search(message)
+    if m:
+        q = m.group(1).strip()
+        if q.casefold() == pwn3d_label.casefold():
+            return "pwned"
+        if q.casefold() == "guest":
+            return "guest_fallback"
+    return "valid" if _AUTH_CRED_RE.match(message) else None
+
+
+def _error_tag(marker: str, message: str) -> tuple[str | None, bool]:
+    """Classify a failure line against the terminal-signature table."""
+    if marker in ("-", "!"):
+        for cls, rx in _TERMINAL_SIGNATURES:
+            if rx.search(message):
+                return cls, True
+    return None, False
 
 
 def count_unmarked_lines(text: str) -> int:
@@ -69,8 +122,14 @@ def count_unmarked_lines(text: str) -> int:
     )
 
 
-def parse_markers(text: str) -> list[StatusRecord]:
-    """Turn nxc stdout into a list of StatusRecord (one per marker line)."""
+def parse_markers(text: str, pwn3d_label: str = "Pwn3d!") -> list[StatusRecord]:
+    """Turn nxc stdout into a list of StatusRecord (one per marker line).
+
+    `pwn3d_label` is the operator-configured pwn marker (``config.pwn3d_label``, default
+    ``Pwn3d!``); it decides which ``[+]`` lines are tagged ``auth="pwned"``. The default
+    is only a last-resort fallback for direct unit calls -- production always threads the
+    configured value.
+    """
     records: list[StatusRecord] = []
     for raw in (text or "").splitlines():
         line = raw.strip()
@@ -80,15 +139,20 @@ def parse_markers(text: str) -> list[StatusRecord]:
         full = _LINE_RE.match(line)
         if full:
             marker = full["marker"]
+            message = full["message"].strip()
+            error_class, terminal = _error_tag(marker, message)
             records.append(
                 StatusRecord(
                     status=_STATUS[marker],
                     marker=marker,
-                    message=full["message"].strip(),
+                    message=message,
                     protocol=full["proto"],
                     host=full["host"],
                     port=int(full["port"]),
                     hostname=full["name"],
+                    auth=_auth_label(marker, message, pwn3d_label),
+                    error_class=error_class,
+                    terminal=terminal,
                 )
             )
             continue
@@ -96,14 +160,124 @@ def parse_markers(text: str) -> list[StatusRecord]:
         marker_only = _MARKER_RE.search(line)
         if marker_only:
             marker = marker_only["marker"]
+            message = marker_only["message"].strip()
+            error_class, terminal = _error_tag(marker, message)
             records.append(
                 StatusRecord(
                     status=_STATUS[marker],
                     marker=marker,
-                    message=marker_only["message"].strip(),
+                    message=message,
+                    auth=_auth_label(marker, message, pwn3d_label),
+                    error_class=error_class,
+                    terminal=terminal,
                 )
             )
     return records
+
+
+def _user_from_message(message: str) -> str | None:
+    """Pull the bare username out of a `DOMAIN\\user:secret ...` auth line."""
+    if not _AUTH_CRED_RE.match(message):
+        return None
+    frag = message.split(":", 1)[0]          # DOMAIN\user
+    return frag.split("\\", 1)[1] if "\\" in frag else frag
+
+
+def build_verdict(records, returncode=None, unparsed_lines=0, stderr=""):
+    """Derive one authoritative outcome from the parsed records.
+
+    Returns ``(verdict, outcome_class, op_error, op_error_note)`` where ``verdict`` answers
+    "did any host authenticate / did we pwn / was a ticket saved" in a single field, so a
+    consumer never has to re-triage records or string-match. A call is a SUCCESS when ANY
+    host authenticates (a sibling ``[-]`` never buries a pwn), a ``(Guest)`` fallback is a
+    guest_only (the credential is INVALID), a returncode-0 call with nothing is benign-empty
+    (not a failure), and a known-terminal error is flagged so the agent does not retry it.
+    """
+    authenticated, guest_only, auth_failed, errors = [], [], [], []
+    ticket_saved = False
+    for r in records:
+        if r.auth == "pwned":
+            authenticated.append({"host": r.host, "user": _user_from_message(r.message), "pwned": True})
+        elif r.auth == "valid":
+            authenticated.append({"host": r.host, "user": _user_from_message(r.message), "pwned": False})
+        elif r.auth == "guest_fallback":
+            guest_only.append({"host": r.host, "user": _user_from_message(r.message)})
+        if r.marker in ("-", "!") and _AUTH_CRED_RE.match(r.message):
+            auth_failed.append({"host": r.host, "user": _user_from_message(r.message)})
+        if r.terminal:
+            errors.append({
+                "host": r.host, "error_class": r.error_class, "message": r.message,
+                "advice": "retrying as-is will not succeed; re-forge or use another credential",
+            })
+        if r.marker == "+" and _TICKET_SAVED_RE.search(r.message):
+            ticket_saved = True       # only a POSITIVE line saves a ticket, never a failure line
+    any_success = bool(authenticated) or ticket_saved
+    verdict = {
+        "authenticated": authenticated,
+        "guest_only": guest_only,
+        "auth_failed": auth_failed,
+        "errors": errors,
+        "ticket_saved": ticket_saved,
+        "any_success": any_success,
+        "pwned": any(a.get("pwned") for a in authenticated),
+        "empty": returncode == 0 and not records and unparsed_lines == 0 and not (stderr or "").strip(),
+    }
+    op_error = errors[0]["error_class"] if errors else None
+    op_error_note = errors[0]["advice"] if errors else None
+    if any_success:
+        outcome_class = "success"                 # never bury a success under a sibling failure
+    elif op_error:
+        outcome_class = "op_error"
+    elif guest_only:
+        outcome_class = "guest_only"
+    elif auth_failed:
+        outcome_class = "auth_failed"
+    elif verdict["empty"]:
+        outcome_class = "benign_empty"
+    else:
+        outcome_class = "ok"
+    return verdict, outcome_class, op_error, op_error_note
+
+
+# Keys whose list value is NOT a dedicated-parser payload, so their presence must not trigger
+# the stdout cap: `command` is the argv, `records` is the cross-tool marker summary.
+_TRIM_EXCLUDE = frozenset({"command", "records"})
+_STDOUT_CAP = 1024
+
+
+def trim_for_model(payload: dict, cap: int = _STDOUT_CAP) -> dict:
+    """Cap redundant raw `stdout` on a MODEL-FACING result dict.
+
+    When a per-tool parser already populated a structured field (entries/shares/users/...),
+    the raw `stdout` is a 2-3x duplicate of the same signal and only burns the agent's context
+    budget, so cap it to `cap` chars behind ``stdout_truncated:true`` (+ ``stdout_bytes``).
+    With NO structured field, `stdout` is the only copy of the signal (see
+    ``count_unmarked_lines``) and is left intact. Pure and defensive -- never raises, and
+    applied only at the model boundary so ``to_dict()`` and every direct caller/test keep full
+    fidelity.
+    """
+    try:
+        if not isinstance(payload, dict):
+            return payload
+        stdout = payload.get("stdout")
+        if not isinstance(stdout, str) or len(stdout) <= cap:
+            return payload
+        has_structured = any(
+            k not in _TRIM_EXCLUDE and isinstance(v, list) and v
+            for k, v in payload.items()
+        )
+        if not has_structured:
+            return payload
+        out = dict(payload)
+        out["stdout_bytes"] = len(stdout)
+        out["stdout"] = (
+            stdout[:cap]
+            + f"\n...[truncated {len(stdout) - cap} chars; structured fields above carry the parsed data]"
+        )
+        out["stdout_truncated"] = True
+        return out
+    except Exception:
+        return payload
 
 
 def parse_shares(text: str) -> list[dict]:

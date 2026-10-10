@@ -16,6 +16,7 @@ that don't have a dedicated tool:
 
 from __future__ import annotations
 
+import asyncio
 import re
 
 from .auth import build_auth_flags
@@ -184,26 +185,68 @@ async def _module_categories(get_config, protocol: str) -> dict[str, str]:
     return cat_map
 
 
+async def collect_module_catalog(get_config, protocols) -> list[dict]:
+    """Flat list of RUNNABLE nxc `-M` modules across the ENABLED protocols for the dynamic
+    find_tool index, each record tagged with its `protocol`. parse_module_list already drops
+    retired ([REMOVED]) modules, so they never enter discovery or the gate. Best-effort: a
+    protocol whose `-L` fails/empties is skipped; total failure returns []. A module supported
+    by several protocols appears once per protocol (each independently runnable via
+    nxc_run_module with that protocol). Runs at startup; cheap and cached per protocol.
+    """
+    async def _one(proto):
+        try:
+            # per-protocol timeout so one hung `-L` can't block server startup forever
+            outcome = await asyncio.wait_for(
+                execute(get_config(), proto, [], ["-L"], offensive=False), timeout=30)
+            return proto, parse_module_list(outcome.stdout)
+        except Exception:  # noqa: BLE001 -- one protocol's -L failing/hanging must not sink discovery
+            return proto, []
+
+    # Run the -L probes CONCURRENTLY (not 10 serial nxc spawns) to keep boot latency bounded.
+    results = await asyncio.gather(*[_one(p) for p in protocols])
+    out: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for proto, mods in results:
+        for m in mods:
+            name = m.get("name")
+            if not name or (proto, name) in seen:
+                continue
+            seen.add((proto, name))
+            out.append({**m, "protocol": proto})
+    return out
+
+
 def register(mcp, get_config) -> None:
     """Attach the discovery + (offensive-gated) escape-hatch meta-tools."""
 
     @mcp.tool()
-    async def nxc_list_modules(protocol: str = "smb") -> dict:
+    async def nxc_list_modules(protocol: str = "smb", verbose: bool = False) -> dict:
         """List the nxc `-M` modules available for a protocol (recon/discovery).
 
-        Runs `nxc <protocol> -L` and returns structured records
-        (name, description, category, privilege). No targets, never offensive.
+        Runs `nxc <protocol> -L`. TERSE by default: each module is {name, category,
+        privilege} (the full `-L` listing is ~16KB and the description rarely changes the
+        decision). Pass `verbose=true` for full descriptions plus the `removed` (retired)
+        list. No targets, never offensive.
         """
         outcome = await execute(get_config(), protocol, [], ["-L"], offensive=False)
         modules = parse_module_list(outcome.stdout)
         # `count` stays the number of RUNNABLE modules, so it keeps matching len(modules).
-        # `removed` is what nxc still lists but retired: without it the response looks
-        # complete while the capability is simply absent, which reads as "nxc cannot do this".
+        if verbose:
+            # `removed` is what nxc still lists but retired: without it the response looks
+            # complete while the capability is simply absent (reads as "nxc cannot do this").
+            return {
+                "protocol": protocol,
+                "count": len(modules),
+                "modules": modules,
+                "removed": parse_removed_modules(outcome.stdout),
+            }
+        terse = [{"name": m.get("name"), "category": m.get("category"),
+                  "privilege": m.get("privilege")} for m in modules]
         return {
             "protocol": protocol,
-            "count": len(modules),
-            "modules": modules,
-            "removed": parse_removed_modules(outcome.stdout),
+            "count": len(terse),
+            "modules": terse,
+            "note": "terse view; pass verbose=true for descriptions and the retired-module list.",
         }
 
     @mcp.tool()

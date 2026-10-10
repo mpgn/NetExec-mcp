@@ -18,6 +18,7 @@ from __future__ import annotations
 import os
 
 from ..auth import build_auth_flags
+from ..config import resolve_downloads_dir
 from ..executor import execute
 from ..results import (
     parse_dir,
@@ -167,6 +168,41 @@ async def _loot_run(get_config, action_flags, targets, **kw) -> dict:
 async def _recon_run(get_config, action_flags, targets, **kw) -> dict:
     """Run a read-only SMB action with dynamic flags (`offensive=False`, recon mode)."""
     return await _action_run(get_config, action_flags, targets, offensive=False, **kw)
+
+
+def _resolve_download_path(get_config, local_path, remote_path):
+    """Where a retrieved file/folder should land, as an ABSOLUTE path handed to nxc.
+
+    An absolute `local_path` is used as-is; a relative or omitted one resolves under the
+    configured downloads dir (default <nxc_home>/downloads, NXC_PATH-isolated), defaulting to
+    the remote basename. nxc otherwise writes a relative path into its own cwd and never says
+    where, so the agent cannot find the file. Returns (abs_path, was_relative).
+    """
+    cfg = get_config()
+    if local_path and os.path.isabs(os.path.expanduser(local_path)):
+        abs_path = os.path.expanduser(local_path)
+        was_rel = False
+    else:
+        base = os.path.normpath(str(resolve_downloads_dir(cfg)))
+        name = (local_path or "").strip()
+        if name:
+            abs_path = os.path.normpath(os.path.join(base, name))
+            if abs_path != base and not abs_path.startswith(base + os.sep):
+                # a relative path that escaped the downloads dir (../) -> clamp to its basename
+                bn = os.path.basename(name)
+                abs_path = os.path.join(base, "download" if bn in ("", ".", "..") else bn)
+        else:
+            # remote_path is usually a WINDOWS path -> split on both separators (os.path.basename
+            # on Linux won't split a backslash).
+            remote_base = remote_path.rstrip("/\\").replace("\\", "/").rsplit("/", 1)[-1]
+            abs_path = os.path.join(base, remote_base or "download")
+        was_rel = True
+    # Create the dir only when a call will actually run (not dry-run) AND the mode permits the
+    # retrieval (get_file/get_folder are loot-gated) -- so a recon-mode refusal leaves no stray dir.
+    gated_ok = getattr(cfg, "allow_loot", False) or getattr(cfg, "allow_offensive", False)
+    if not getattr(cfg, "dry_run", False) and gated_ok:
+        os.makedirs(os.path.dirname(abs_path) or ".", exist_ok=True)
+    return abs_path, was_rel
 
 
 async def _run_module(get_config, module, targets, *, offensive, dump=False, options=None, **kw) -> dict:
@@ -820,7 +856,7 @@ def register(mcp, get_config) -> None:
         targets: list[str],
         share: str,
         remote_path: str,
-        local_path: str,
+        local_path: str | None = None,
         username: str | None = None,
         password: str | None = None,
         ntlm_hash: str | None = None,
@@ -841,16 +877,25 @@ def register(mcp, get_config) -> None:
     ) -> dict:
         """Download a file from an SMB share (`--share <share> --get-file <remote> <local>`).
 
-        `remote_path` is relative to `share`; the file is written to `local_path` on
-        the nxc host. LOOT-GATED (NXC_MODE=loot): read-only retrieval that harvests
-        data from the target (no state change).
+        `remote_path` is relative to `share`. `local_path` is OPTIONAL: a relative or omitted
+        value lands under the downloads dir (NXC_DOWNLOADS_DIR, default <nxc_home>/downloads),
+        defaulting to the remote basename; an absolute value is used verbatim. The result's
+        `saved_to` is the absolute path where the file landed. LOOT-GATED (NXC_MODE=loot):
+        read-only retrieval that harvests data from the target (no state change).
         """
-        flags = ["--share", share, "--get-file", remote_path, local_path]
-        return await _loot_run(
+        abs_path, was_rel = _resolve_download_path(get_config, local_path, remote_path)
+        flags = ["--share", share, "--get-file", remote_path, abs_path]
+        result = await _loot_run(
             get_config, flags, targets, username=username, password=password,
             ntlm_hash=ntlm_hash, domain=domain, local_auth=local_auth,
             kerberos=kerberos, use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key,
         )
+        result["saved_to"] = abs_path
+        if was_rel:
+            result["local_path_note"] = (
+                f"local_path was relative/omitted; file written to {abs_path!r}. "
+                "Use that absolute path (saved_to) to read it.")
+        return result
 
     @mcp.tool()
     async def smb_put_file(
@@ -894,7 +939,7 @@ def register(mcp, get_config) -> None:
         targets: list[str],
         share: str,
         remote_path: str,
-        local_path: str,
+        local_path: str | None = None,
         recursive: bool = True,
         ignore_empty_folders: bool = False,
         username: str | None = None,
@@ -923,16 +968,22 @@ def register(mcp, get_config) -> None:
         `--ignore-empty-folders` to skip empty directories. LOOT-GATED (NXC_MODE=loot):
         read-only retrieval that harvests data from the target (no state change).
         """
-        flags = ["--share", share, "--get-folder", remote_path, local_path]
+        abs_path, was_rel = _resolve_download_path(get_config, local_path, remote_path)
+        flags = ["--share", share, "--get-folder", remote_path, abs_path]
         if not recursive:
             flags.append("--no-recursive")
         if ignore_empty_folders:
             flags.append("--ignore-empty-folders")
-        return await _loot_run(
+        result = await _loot_run(
             get_config, flags, targets, username=username, password=password,
             ntlm_hash=ntlm_hash, domain=domain, local_auth=local_auth,
             kerberos=kerberos, use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key,
         )
+        result["saved_to"] = abs_path
+        if was_rel:
+            result["local_path_note"] = (
+                f"local_path was relative/omitted; folder written under {abs_path!r} (saved_to).")
+        return result
 
     # ---- Additional read-only enumeration ---- #
 

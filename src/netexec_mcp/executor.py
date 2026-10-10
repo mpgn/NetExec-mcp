@@ -33,10 +33,11 @@ from .guardrails import (
     check_offensive,
     check_scope,
     check_target_cap,
+    offensive_block_detail,
     parse_scope,
     write_audit,
 )
-from .results import StatusRecord, count_unmarked_lines, parse_markers
+from .results import StatusRecord, build_verdict, count_unmarked_lines, parse_markers
 
 # Matches CSI / SGR escape sequences such as the colour codes nxc emits.
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
@@ -258,6 +259,14 @@ class ExecOutcome:
     # Set (instead of running) when a named account was given with no secret but nxc already
     # holds a reusable credential for it in this protocol's DB -- see execute()'s auth-nudge.
     auth_suggestion: dict | None = None
+    # Authoritative outcome derived from `records` (see results.build_verdict): one field that
+    # answers "did any host authenticate / did we pwn / was a ticket saved", so a consumer
+    # never re-triages records or mistakes a (Guest) fallback for a valid login. Defaulted so
+    # the explicit ExecOutcome(...) constructions in tests keep working.
+    verdict: dict = field(default_factory=dict)
+    outcome_class: str = ""           # success | guest_only | auth_failed | op_error | benign_empty | ok
+    op_error: str | None = None       # a known-terminal error class (retrying as-is will not help)
+    op_error_note: str | None = None  # one-line actionable note for that terminal error
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -402,13 +411,17 @@ async def execute(
         # NXC_MODE -- the same "show the command" courtesy suggest mode already gives.
         # Nothing executes here.
         required = "loot" if dump else "full"
+        # The loot-tier (dump) refusal from check_offensive is already precise; the full-tier
+        # one is generic, so replace its lead with a tool-aware detail (name a read-only sibling,
+        # or say plainly there is none -- so the agent stops hunting for an alternative).
+        lead = str(exc) if dump else offensive_block_detail(_current_tool.get())
         write_audit(
             config.audit_log,
-            {**audit_base, "outcome": "rejected", "reason": str(exc),
+            {**audit_base, "outcome": "rejected", "reason": lead,
              "required_mode": required},
         )
         raise OffensiveBlocked(
-            f"{exc}\n\nRequires NXC_MODE={required}. Command that WOULD run "
+            f"{lead}\n\nRequires NXC_MODE={required}. Command that WOULD run "
             f"(not executed): {resolved}"
         ) from exc
     except GuardrailError as exc:
@@ -434,9 +447,12 @@ async def execute(
 
     env = {"KRB5CCNAME": os.path.expanduser(ccache)} if ccache else None
     result = await run_async(argv, config.timeout, env=env)
-    records = parse_markers(result.stdout)
+    records = parse_markers(result.stdout, config.pwn3d_label)
     counts = dict(Counter(r.status for r in records))
     unparsed_lines = count_unmarked_lines(result.stdout)
+    verdict, outcome_class, op_error, op_error_note = build_verdict(
+        records, result.returncode, unparsed_lines, result.stderr
+    )
     write_audit(
         config.audit_log,
         {
@@ -457,4 +473,8 @@ async def execute(
         records=records,
         counts=counts,
         unparsed_lines=unparsed_lines,
+        verdict=verdict,
+        outcome_class=outcome_class,
+        op_error=op_error,
+        op_error_note=op_error_note,
     )
