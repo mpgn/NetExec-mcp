@@ -54,6 +54,20 @@ That label is operator-configurable (`pwn3d_label` in `nxc.conf`, default `Pwn3d
 This server's configured label is: **`{pwn3d_label}`** — match that, not a hardcoded
 string. For an authoritative, config-independent "who is admin where", prefer
 `workspace_admins` (reads the `admin_relations` table).
+
+A `[+]` line ending in **`(Guest)`** is NOT a valid login: the credential is **invalid**
+and the server granted a guest/null session. Do not reuse such a credential.
+
+Read the call's top-level **`verdict`** instead of re-triaging records: it carries
+`authenticated` (with `pwned` per host), `guest_only`, `auth_failed`, `ticket_saved`,
+`any_success` and `empty`, and each record now carries an `auth` tag
+(`pwned`/`guest_fallback`/`valid`). `outcome_class` summarises the call
+(`success`/`guest_only`/`auth_failed`/`op_error`/`benign_empty`/`ok`) — a call is a
+**success when ANY host authenticates**, even if sibling hosts failed, and a
+returncode-0 call with nothing is `benign_empty`, not a failure. When `op_error` is set
+(e.g. a revoked/wrong-realm ticket, DCSync denied), retrying the same call will not
+succeed — change the credential/ticket, don't loop. `stdout` may be capped with
+`stdout_truncated:true` when a structured field already carries the parsed data.
 """
 
 _WORKFLOWS = """# Common workflows
