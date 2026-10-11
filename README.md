@@ -192,7 +192,13 @@ handlers reject.
 This MCP is a subprocess wrapper and pins no nxc dependency, but its tools/flags are
 verified against a specific nxc build:
 
-> **nxc 1.5.1 "Yippie-Ki-Yay", commit `4134e689`** (`4134e689…`, 2026-09-23, build 881)
+> **nxc 1.5.1 "Yippie-Ki-Yay", commit `9ec65be0`** (`9ec65be0…`, 2026-10-11, build 990)
+>
+> Bump `4134e689` (build 881) → `9ec65be0` (build 990): the only protocol-flag change was
+> WMI gaining credential dumping + file retrieval (`wmi_dump`, upstream PR #1379), now wrapped
+> as `wmi_sam`/`wmi_lsa`/`wmi_ntds`/`wmi_get_file` (loot-gated, mirroring the SMB equivalents).
+> New/changed `-M` modules (tombstone, raisechild fix, certipy-find, spider_plus, …) run via
+> `nxc_run_module` and are surfaced by `nxc_find_tool`, so they need no dedicated wrapper.
 
 Check your local build with `nxc --version` (it prints `version - codename - commit - build`).
 nxc moves fast and occasionally moves/removes flags, so when you bump nxc, re-verify the

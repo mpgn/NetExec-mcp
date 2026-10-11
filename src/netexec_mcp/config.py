@@ -88,6 +88,42 @@ def resolve_downloads_dir(cfg) -> Path:
     return Path(os.path.abspath(os.path.expanduser(d))) if d else (nxc_home() / "downloads")
 
 
+def download_target(cfg, local_path, remote_path) -> tuple[str, bool]:
+    """Resolve where a retrieved file/folder lands, as an ABSOLUTE path handed to nxc, and
+    whether the caller's ``local_path`` was relative/omitted.
+
+    An absolute ``local_path`` is used verbatim; a relative or omitted one resolves under
+    ``resolve_downloads_dir(cfg)`` (default ``<nxc_home>/downloads``, NXC_PATH-isolated),
+    defaulting to the remote basename and clamped inside the downloads dir. nxc otherwise
+    writes a relative path into its own cwd and never says where, so the agent cannot find the
+    file. The dir is created only when a call will actually run (not dry-run, and the mode
+    permits the retrieval), so a refused call leaves no stray dir. Shared by the SMB and WMI
+    file-retrieval tools. Returns ``(abs_path, was_relative)``.
+    """
+    if local_path and os.path.isabs(os.path.expanduser(local_path)):
+        abs_path = os.path.expanduser(local_path)
+        was_rel = False
+    else:
+        base = os.path.normpath(str(resolve_downloads_dir(cfg)))
+        name = (local_path or "").strip()
+        if name:
+            abs_path = os.path.normpath(os.path.join(base, name))
+            if abs_path != base and not abs_path.startswith(base + os.sep):
+                # a relative path that escaped the downloads dir (../) -> clamp to its basename
+                bn = os.path.basename(name)
+                abs_path = os.path.join(base, "download" if bn in ("", ".", "..") else bn)
+        else:
+            # remote_path is usually a WINDOWS path -> split on both separators (os.path.basename
+            # on Linux won't split a backslash).
+            remote_base = remote_path.rstrip("/\\").replace("\\", "/").rsplit("/", 1)[-1]
+            abs_path = os.path.join(base, remote_base or "download")
+        was_rel = True
+    gated_ok = getattr(cfg, "allow_loot", False) or getattr(cfg, "allow_offensive", False)
+    if not getattr(cfg, "dry_run", False) and gated_ok:
+        os.makedirs(os.path.dirname(abs_path) or ".", exist_ok=True)
+    return abs_path, was_rel
+
+
 # nxc's own fallbacks when nxc.conf is absent or a key is unset.
 _NXC_CONF_DEFAULTS = {"pwn3d_label": "Pwn3d!", "workspace": "default"}
 

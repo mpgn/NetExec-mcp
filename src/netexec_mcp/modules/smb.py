@@ -18,7 +18,7 @@ from __future__ import annotations
 import os
 
 from ..auth import build_auth_flags
-from ..config import resolve_downloads_dir
+from ..config import download_target
 from ..executor import execute
 from ..results import (
     parse_dir,
@@ -171,38 +171,9 @@ async def _recon_run(get_config, action_flags, targets, **kw) -> dict:
 
 
 def _resolve_download_path(get_config, local_path, remote_path):
-    """Where a retrieved file/folder should land, as an ABSOLUTE path handed to nxc.
-
-    An absolute `local_path` is used as-is; a relative or omitted one resolves under the
-    configured downloads dir (default <nxc_home>/downloads, NXC_PATH-isolated), defaulting to
-    the remote basename. nxc otherwise writes a relative path into its own cwd and never says
-    where, so the agent cannot find the file. Returns (abs_path, was_relative).
-    """
-    cfg = get_config()
-    if local_path and os.path.isabs(os.path.expanduser(local_path)):
-        abs_path = os.path.expanduser(local_path)
-        was_rel = False
-    else:
-        base = os.path.normpath(str(resolve_downloads_dir(cfg)))
-        name = (local_path or "").strip()
-        if name:
-            abs_path = os.path.normpath(os.path.join(base, name))
-            if abs_path != base and not abs_path.startswith(base + os.sep):
-                # a relative path that escaped the downloads dir (../) -> clamp to its basename
-                bn = os.path.basename(name)
-                abs_path = os.path.join(base, "download" if bn in ("", ".", "..") else bn)
-        else:
-            # remote_path is usually a WINDOWS path -> split on both separators (os.path.basename
-            # on Linux won't split a backslash).
-            remote_base = remote_path.rstrip("/\\").replace("\\", "/").rsplit("/", 1)[-1]
-            abs_path = os.path.join(base, remote_base or "download")
-        was_rel = True
-    # Create the dir only when a call will actually run (not dry-run) AND the mode permits the
-    # retrieval (get_file/get_folder are loot-gated) -- so a recon-mode refusal leaves no stray dir.
-    gated_ok = getattr(cfg, "allow_loot", False) or getattr(cfg, "allow_offensive", False)
-    if not getattr(cfg, "dry_run", False) and gated_ok:
-        os.makedirs(os.path.dirname(abs_path) or ".", exist_ok=True)
-    return abs_path, was_rel
+    """Thin wrapper over config.download_target, kept for the smb_get_file/get_folder
+    callers. See config.download_target for the resolution + saved_to contract."""
+    return download_target(get_config(), local_path, remote_path)
 
 
 async def _run_module(get_config, module, targets, *, offensive, dump=False, options=None, **kw) -> dict:

