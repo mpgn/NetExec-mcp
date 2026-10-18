@@ -67,6 +67,7 @@ def build_auth_flags(
     pfx_pass: str | None = None,
     pem_cert: str | None = None,
     pem_key: str | None = None,
+    schannel: bool = False,
 ) -> list[str]:
     """Translate credential parameters into an nxc auth flag list.
 
@@ -82,6 +83,31 @@ def build_auth_flags(
     passwords = _as_list(password)
     hashes = _as_list(ntlm_hash)
     cert_auth = bool(pfx_cert or pfx_base64 or pem_cert)
+
+    if schannel:
+        # LDAP-only. A Schannel bind authenticates with a CERTIFICATE over TLS; the DC maps
+        # it to an account server-side, so there is no username/password to send (nxc ignores
+        # -u with --schannel and learns the account via LDAP whoami). It therefore needs a
+        # certificate and nothing else -- mirror nxc's own fail-closed check.
+        if not cert_auth:
+            raise AuthError(
+                "--schannel requires a certificate: pfx_cert, pfx_base64, or pem_cert + pem_key."
+            )
+        if bool(pem_cert) != bool(pem_key):
+            raise AuthError("PEM certificate auth needs both pem_cert and pem_key.")
+        flags: list[str] = []
+        if pfx_cert:
+            flags += ["--pfx-cert", pfx_cert]
+        if pfx_base64:
+            flags += ["--pfx-base64", pfx_base64]
+        if pfx_pass:
+            flags += ["--pfx-pass", pfx_pass]
+        if pem_cert:
+            flags += ["--pem-cert", pem_cert]
+        if pem_key:
+            flags += ["--pem-key", pem_key]
+        flags.append("--schannel")
+        return flags
 
     if passwords and hashes:
         raise AuthError("provide either password(s) or NTLM hash(es), not both.")

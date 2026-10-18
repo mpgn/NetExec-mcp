@@ -60,6 +60,10 @@ _TRAILING_QUAL_RE = re.compile(r"\(([^)]+)\)\s*$")
 # VNC). The leading `[^:\s]+:` (no space before the colon) still excludes non-auth `[+]` lines
 # like "[+] Response for object:" (space before the colon) and "[+] Dumping ...".
 _AUTH_CRED_RE = re.compile(r"^[^:\s]+:")
+# A Schannel (certificate) LDAP bind has no secret to print; nxc marks success as
+# `DOMAIN\user from certificate` (optionally ` (Pwn3d!)`). There is no `token:` prefix,
+# so _AUTH_CRED_RE would miss it -- match the certificate form explicitly.
+_CERT_AUTH_RE = re.compile(r"\s+from certificate\b", re.IGNORECASE)
 # Terminal failure signatures: the ticket/credential will NOT work on a plain retry (re-forge
 # or change credential). Conservative: NO bare STATUS_ACCESS_DENIED (benign, e.g. a guest that
 # cannot list shares), and NO transient errors -- KRB_AP_ERR_SKEW (fix the clock) and
@@ -88,7 +92,9 @@ def _auth_label(marker: str, message: str, pwn3d_label: str) -> str | None:
             return "pwned"
         if q.casefold() == "guest":
             return "guest_fallback"
-    return "valid" if _AUTH_CRED_RE.match(message) else None
+    if _AUTH_CRED_RE.match(message) or _CERT_AUTH_RE.search(message):
+        return "valid"
+    return None
 
 
 def _error_tag(marker: str, message: str) -> tuple[str | None, bool]:
@@ -176,10 +182,17 @@ def parse_markers(text: str, pwn3d_label: str = "Pwn3d!") -> list[StatusRecord]:
 
 
 def _user_from_message(message: str) -> str | None:
-    """Pull the bare username out of a `DOMAIN\\user:secret ...` auth line."""
-    if not _AUTH_CRED_RE.match(message):
+    """Pull the bare username out of an auth line.
+
+    Handles both the credential form `DOMAIN\\user:secret ...` and the Schannel
+    certificate form `DOMAIN\\user from certificate [...]`.
+    """
+    if _CERT_AUTH_RE.search(message):
+        frag = _CERT_AUTH_RE.split(message, 1)[0].strip()   # DOMAIN\user
+    elif _AUTH_CRED_RE.match(message):
+        frag = message.split(":", 1)[0]                     # DOMAIN\user
+    else:
         return None
-    frag = message.split(":", 1)[0]          # DOMAIN\user
     return frag.split("\\", 1)[1] if "\\" in frag else frag
 
 
