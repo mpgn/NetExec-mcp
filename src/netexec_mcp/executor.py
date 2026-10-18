@@ -163,13 +163,21 @@ async def _drain(stream: asyncio.StreamReader, buf: bytearray) -> None:
 _DRAIN_GRACE_S = 5
 
 
-async def run_async(argv: list[str], timeout: int, env: dict | None = None) -> CommandResult:
+async def run_async(
+    argv: list[str], timeout: int, env: dict | None = None, stdin_input: str | None = None
+) -> CommandResult:
     """Async runner (no shell) with a hard timeout.
 
     On timeout the whole process GROUP is killed and whatever output was produced is
     returned with `timed_out=True` and `returncode=None`. Raises FileNotFoundError if the
     executable is missing. `env` (if given) is merged over the inherited environment
     for this subprocess only (e.g. KRB5CCNAME for a per-call ccache).
+
+    `stdin_input`, if given, is fed to the child's stdin and the pipe is then closed.
+    It exists for the handful of nxc actions that prompt on the tty (e.g. the RDP exec
+    "disconnect the Windows session [Y/n]" confirmation): the child still never inherits
+    the MCP's JSON-RPC stdin (the Windows-hang guard), it only sees these bytes. When it
+    is None the child gets DEVNULL, exactly as before.
 
     Three details here are load-bearing; see docs/BUG-executor-timeout-orphan.md for the
     incident that produced them, and for the reproduction.
@@ -187,12 +195,21 @@ async def run_async(argv: list[str], timeout: int, env: dict | None = None) -> C
     proc = await asyncio.create_subprocess_exec(
         *argv,
         # See run(): don't inherit the MCP's JSON-RPC stdin pipe (hangs nxc on Windows).
-        stdin=asyncio.subprocess.DEVNULL,
+        # A caller that must answer a prompt passes stdin_input; the child then sees ONLY
+        # those bytes, never the inherited pipe.
+        stdin=asyncio.subprocess.PIPE if stdin_input is not None else asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env=None if env is None else {**os.environ, **env},
         start_new_session=True,
     )
+    if stdin_input is not None and proc.stdin is not None:
+        # Tiny payload (a "y\n"), so a write-then-close never blocks on the pipe buffer.
+        try:
+            proc.stdin.write(stdin_input.encode())
+            proc.stdin.close()
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass  # the child exited before reading; its output/returncode still stand
     out, err = bytearray(), bytearray()
     drains = [
         asyncio.create_task(_drain(proc.stdout, out)),
@@ -366,6 +383,7 @@ async def execute(
     offensive: bool = False,
     dump: bool = False,
     ccache: str | None = None,
+    stdin_input: str | None = None,
 ) -> ExecOutcome:
     """Build, guard, and (unless dry-run) run an nxc command, parsing markers.
 
@@ -446,7 +464,7 @@ async def execute(
         return ExecOutcome(command=argv, resolved=resolved, dry_run=True)
 
     env = {"KRB5CCNAME": os.path.expanduser(ccache)} if ccache else None
-    result = await run_async(argv, config.timeout, env=env)
+    result = await run_async(argv, config.timeout, env=env, stdin_input=stdin_input)
     records = parse_markers(result.stdout, config.pwn3d_label)
     counts = dict(Counter(r.status for r in records))
     unparsed_lines = count_unmarked_lines(result.stdout)
