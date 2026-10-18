@@ -648,6 +648,59 @@ def parse_mssql_logins(text: str) -> list[dict]:
     )
 
 
+# nxc prints a mssql -q result set as highlight lines (no status marker): one row per
+# `--------------------` separator (nxc commit f7835c3b), then a `key:value` line per
+# named column, or a bare `value` line for an unnamed one. Payload after the
+# `PROTO HOST PORT NAME` prefix, e.g.:
+#   --------------------
+#   name:master
+#   database_id:1
+_MSSQL_ROW_SEP_RE = re.compile(r"^-{3,}$")
+
+
+def parse_mssql_query(text: str) -> list[dict]:
+    """Parse `nxc mssql -q <query>` output into a list of `{column: value}` rows.
+
+    Rows are delimited by nxc's `--------------------` separator line. A first row with no
+    separator before it (older nxc, which printed none) is still opened on its first value,
+    so a single-row result parses either way; only multi-row results on pre-separator nxc
+    are ambiguous and collapse. An unnamed column (a bare value line, e.g. `SELECT
+    @@version`) is keyed positionally as `column_N`. A value may itself contain `:` -- only
+    the first one splits key from value.
+    """
+    rows: list[dict] = []
+    current: dict | None = None
+    col = 0
+    for raw in (text or "").splitlines():
+        if not raw.strip():
+            continue
+        prefix = _PREFIX_RE.match(raw)
+        if not prefix:
+            continue
+        payload = raw[prefix.end():].strip()
+        if not payload or _MARKER_RE.match(payload):
+            # Skip nxc's own status lines (`[*]` fingerprint, `[+]` auth, `[-]` fail):
+            # they share the PROTO HOST PORT NAME prefix but are not result rows. A query
+            # result set is highlight lines with no marker.
+            continue
+        if _MSSQL_ROW_SEP_RE.match(payload):
+            current = {}
+            rows.append(current)
+            col = 0
+            continue
+        if current is None:          # first row on nxc builds that print no separator
+            current = {}
+            rows.append(current)
+            col = 0
+        col += 1
+        key, sep, value = payload.partition(":")
+        if sep:
+            current[key.strip()] = value.strip()
+        else:
+            current[f"column_{col}"] = payload
+    return rows
+
+
 # A RID-brute highlight-line payload (after the PROTO HOST PORT NAME prefix):
 #   500: NORTH\Administrator                (mssql -- no SID-type suffix)
 #   500: CORP\Administrator (SidTypeUser)   (smb-style -- tolerated, captured)

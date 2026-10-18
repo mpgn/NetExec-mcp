@@ -35,6 +35,7 @@ from ..results import (
     parse_mssql_impersonate,
     parse_mssql_links,
     parse_mssql_logins,
+    parse_mssql_query,
     parse_mssql_tables,
     parse_rid_brute,
     parse_secretsdump,
@@ -274,10 +275,13 @@ def register(mcp, get_config) -> None:
         config changes (e.g. enabling `xp_cmdshell`) and stored-proc calls -- so it is not
         treated as read-only recon. For read-only enumeration use `mssql_database` /
         `mssql_rid_brute`. The query is passed as a single argv token.
+
+        Result sets are parsed into a structured `rows` list (`{column: value}` per row);
+        the raw `stdout` is then capped at the model boundary since `rows` carries the data.
         """
         if not query or not query.strip():
             raise ValueError("query is required for mssql_query")
-        return await _mssql_run(
+        result = await _mssql_run(
             get_config, ["-q", query], targets, offensive=True, port=port,
             mssql_timeout=mssql_timeout, username=username, password=password,
             ntlm_hash=ntlm_hash, domain=domain, local_auth=local_auth, kerberos=kerberos,
@@ -285,6 +289,8 @@ def register(mcp, get_config) -> None:
             ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass,
             pem_cert=pem_cert, pem_key=pem_key,
         )
+        result["rows"] = parse_mssql_query(result["stdout"])
+        return result
 
     @mcp.tool()
     async def mssql_exec(
