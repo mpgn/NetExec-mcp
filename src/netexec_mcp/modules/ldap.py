@@ -13,9 +13,13 @@ guardrails and the audit log apply uniformly. The surface spans:
 
 LDAP is always domain authentication, so these tools omit ``--local-auth``. They
 share the rest of the credential model from :mod:`auth` (user/pass, ``-H`` hash,
-Kerberos, ``-d`` domain, stored ``cred_id``, ``laps``). Every tool also exposes the
-``ldap_timeout`` transport knob (nxc ``--ldap-timeout``, default 3s) -- raise it for
-slow or high-latency DCs where the aggressive default trips a false connection error.
+Kerberos, ``-d`` domain, stored ``cred_id``, ``laps``, and PKINIT/certificate auth).
+Set ``schannel=True`` to bind with a certificate over Schannel instead of PKINIT: it
+needs a certificate (``pfx_cert`` / ``pfx_base64`` / ``pem_cert`` + ``pem_key``) and no
+username -- the DC maps the certificate to an account, so the success line reads
+``DOMAIN\\user from certificate``. Every tool also exposes the ``ldap_timeout`` transport
+knob (nxc ``--ldap-timeout``, default 3s) -- raise it for slow or high-latency DCs where
+the aggressive default trips a false connection error.
 """
 
 from __future__ import annotations
@@ -103,6 +107,7 @@ async def _ldap_run(
     pfx_pass=None,
     pem_cert=None,
     pem_key=None,
+    schannel=False,
     ldap_timeout=None,
 ) -> dict:
     """Build auth+action flags and run against the ldap protocol."""
@@ -123,6 +128,7 @@ async def _ldap_run(
         pfx_pass=pfx_pass,
         pem_cert=pem_cert,
         pem_key=pem_key,
+        schannel=schannel,
     )
     transport: list[str] = []
     if ldap_timeout is not None:
@@ -166,6 +172,7 @@ def register(mcp, get_config) -> None:
         pfx_pass: str | None = None,
         pem_cert: str | None = None,
         pem_key: str | None = None,
+        schannel: bool = False,
         ldap_timeout: int | None = None,
     ) -> dict:
         """Fingerprint the DC over LDAP and verify authentication (bare `nxc ldap <targets>`).
@@ -176,7 +183,7 @@ def register(mcp, get_config) -> None:
         return await _ldap_run(
             get_config, [], targets, username=username, password=password,
             ntlm_hash=ntlm_hash, domain=domain, kerberos=kerberos,
-            use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, ldap_timeout=ldap_timeout,
+            use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, schannel=schannel, ldap_timeout=ldap_timeout,
         )
 
     @mcp.tool()
@@ -199,6 +206,7 @@ def register(mcp, get_config) -> None:
         pfx_pass: str | None = None,
         pem_cert: str | None = None,
         pem_key: str | None = None,
+        schannel: bool = False,
         ldap_timeout: int | None = None,
     ) -> dict:
         """Enumerate domain users (`--users`). Pass `users` to query specific accounts.
@@ -209,7 +217,7 @@ def register(mcp, get_config) -> None:
         result = await _ldap_run(
             get_config, ["--users", *(users or [])], targets, username=username,
             password=password, ntlm_hash=ntlm_hash, domain=domain, kerberos=kerberos,
-            use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, ldap_timeout=ldap_timeout,
+            use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, schannel=schannel, ldap_timeout=ldap_timeout,
         )
         result["users"] = parse_users(result["stdout"])
         return result
@@ -234,13 +242,14 @@ def register(mcp, get_config) -> None:
         pfx_pass: str | None = None,
         pem_cert: str | None = None,
         pem_key: str | None = None,
+        schannel: bool = False,
         ldap_timeout: int | None = None,
     ) -> dict:
         """Enumerate only active (non-disabled) domain user accounts (`--active-users`)."""
         result = await _ldap_run(
             get_config, ["--active-users", *(users or [])], targets, username=username,
             password=password, ntlm_hash=ntlm_hash, domain=domain, kerberos=kerberos,
-            use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, ldap_timeout=ldap_timeout,
+            use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, schannel=schannel, ldap_timeout=ldap_timeout,
         )
         result["users"] = parse_users(result["stdout"])
         return result
@@ -265,6 +274,7 @@ def register(mcp, get_config) -> None:
         pfx_pass: str | None = None,
         pem_cert: str | None = None,
         pem_key: str | None = None,
+        schannel: bool = False,
         ldap_timeout: int | None = None,
     ) -> dict:
         """Enumerate domain groups (`--groups`); pass `group` to list its members.
@@ -279,7 +289,7 @@ def register(mcp, get_config) -> None:
         result = await _ldap_run(
             get_config, flags, targets, username=username, password=password,
             ntlm_hash=ntlm_hash, domain=domain, kerberos=kerberos,
-            use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, ldap_timeout=ldap_timeout,
+            use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, schannel=schannel, ldap_timeout=ldap_timeout,
         )
         if group:
             result["members"] = parse_ldap_group_members(result["stdout"])
@@ -307,6 +317,7 @@ def register(mcp, get_config) -> None:
         pfx_pass: str | None = None,
         pem_cert: str | None = None,
         pem_key: str | None = None,
+        schannel: bool = False,
         ldap_timeout: int | None = None,
     ) -> dict:
         """Enumerate organizational units (`--ous`); pass `ou` to list the users inside one.
@@ -324,7 +335,7 @@ def register(mcp, get_config) -> None:
         result = await _ldap_run(
             get_config, flags, targets, username=username, password=password,
             ntlm_hash=ntlm_hash, domain=domain, kerberos=kerberos,
-            use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, ldap_timeout=ldap_timeout,
+            use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, schannel=schannel, ldap_timeout=ldap_timeout,
         )
         if ou:
             result["users"] = parse_ldap_ou_users(result["stdout"])
@@ -351,6 +362,7 @@ def register(mcp, get_config) -> None:
         pfx_pass: str | None = None,
         pem_cert: str | None = None,
         pem_key: str | None = None,
+        schannel: bool = False,
         ldap_timeout: int | None = None,
     ) -> dict:
         """Enumerate domain computer accounts (`--computers`).
@@ -361,7 +373,7 @@ def register(mcp, get_config) -> None:
         result = await _ldap_run(
             get_config, ["--computers"], targets, username=username, password=password,
             ntlm_hash=ntlm_hash, domain=domain, kerberos=kerberos,
-            use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, ldap_timeout=ldap_timeout,
+            use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, schannel=schannel, ldap_timeout=ldap_timeout,
         )
         result["computers"] = parse_ldap_computers(result["stdout"])
         return result
@@ -385,6 +397,7 @@ def register(mcp, get_config) -> None:
         pfx_pass: str | None = None,
         pem_cert: str | None = None,
         pem_key: str | None = None,
+        schannel: bool = False,
         ldap_timeout: int | None = None,
     ) -> dict:
         """Enumerate the domain controllers and the forest's domain trusts (`--dc-list`).
@@ -399,7 +412,7 @@ def register(mcp, get_config) -> None:
         result = await _ldap_run(
             get_config, ["--dc-list"], targets, username=username, password=password,
             ntlm_hash=ntlm_hash, domain=domain, kerberos=kerberos,
-            use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, ldap_timeout=ldap_timeout,
+            use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, schannel=schannel, ldap_timeout=ldap_timeout,
         )
         result["dcs"] = parse_dc_list(result["stdout"])
         return result
@@ -423,13 +436,14 @@ def register(mcp, get_config) -> None:
         pfx_pass: str | None = None,
         pem_cert: str | None = None,
         pem_key: str | None = None,
+        schannel: bool = False,
         ldap_timeout: int | None = None,
     ) -> dict:
         """Get the domain SID (`--get-sid`)."""
         result = await _ldap_run(
             get_config, ["--get-sid"], targets, username=username, password=password,
             ntlm_hash=ntlm_hash, domain=domain, kerberos=kerberos,
-            use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, ldap_timeout=ldap_timeout,
+            use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, schannel=schannel, ldap_timeout=ldap_timeout,
         )
         result["domain_sid"] = parse_domain_sid(result["stdout"])
         return result
@@ -453,13 +467,14 @@ def register(mcp, get_config) -> None:
         pfx_pass: str | None = None,
         pem_cert: str | None = None,
         pem_key: str | None = None,
+        schannel: bool = False,
         ldap_timeout: int | None = None,
     ) -> dict:
         """Dump the domain password policy via LDAP (`--pass-pol`)."""
         result = await _ldap_run(
             get_config, ["--pass-pol"], targets, username=username, password=password,
             ntlm_hash=ntlm_hash, domain=domain, kerberos=kerberos,
-            use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, ldap_timeout=ldap_timeout,
+            use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, schannel=schannel, ldap_timeout=ldap_timeout,
         )
         result["policy"] = parse_pass_pol(result["stdout"])
         return result
@@ -483,13 +498,14 @@ def register(mcp, get_config) -> None:
         pfx_pass: str | None = None,
         pem_cert: str | None = None,
         pem_key: str | None = None,
+        schannel: bool = False,
         ldap_timeout: int | None = None,
     ) -> dict:
         """Get fine-grained password policies / PSOs (`--pso`)."""
         return await _ldap_run(
             get_config, ["--pso"], targets, username=username, password=password,
             ntlm_hash=ntlm_hash, domain=domain, kerberos=kerberos,
-            use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, ldap_timeout=ldap_timeout,
+            use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, schannel=schannel, ldap_timeout=ldap_timeout,
         )
 
     @mcp.tool()
@@ -511,13 +527,14 @@ def register(mcp, get_config) -> None:
         pfx_pass: str | None = None,
         pem_cert: str | None = None,
         pem_key: str | None = None,
+        schannel: bool = False,
         ldap_timeout: int | None = None,
     ) -> dict:
         """Find delegation relationships in the domain (`--find-delegation`)."""
         result = await _ldap_run(
             get_config, ["--find-delegation"], targets, username=username, password=password,
             ntlm_hash=ntlm_hash, domain=domain, kerberos=kerberos,
-            use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, ldap_timeout=ldap_timeout,
+            use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, schannel=schannel, ldap_timeout=ldap_timeout,
         )
         result["delegations"] = parse_ldap_delegation(result["stdout"])
         return result
@@ -541,13 +558,14 @@ def register(mcp, get_config) -> None:
         pfx_pass: str | None = None,
         pem_cert: str | None = None,
         pem_key: str | None = None,
+        schannel: bool = False,
         ldap_timeout: int | None = None,
     ) -> dict:
         """List principals flagged TRUSTED_FOR_DELEGATION (`--trusted-for-delegation`)."""
         result = await _ldap_run(
             get_config, ["--trusted-for-delegation"], targets, username=username,
             password=password, ntlm_hash=ntlm_hash, domain=domain, kerberos=kerberos,
-            use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, ldap_timeout=ldap_timeout,
+            use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, schannel=schannel, ldap_timeout=ldap_timeout,
         )
         result["principals"] = parse_ldap_principals(result["stdout"])
         return result
@@ -571,6 +589,7 @@ def register(mcp, get_config) -> None:
         pfx_pass: str | None = None,
         pem_cert: str | None = None,
         pem_key: str | None = None,
+        schannel: bool = False,
         ldap_timeout: int | None = None,
     ) -> dict:
         """List users with the PASSWD_NOTREQD flag (`--password-not-required`).
@@ -580,7 +599,7 @@ def register(mcp, get_config) -> None:
         result = await _ldap_run(
             get_config, ["--password-not-required"], targets, username=username,
             password=password, ntlm_hash=ntlm_hash, domain=domain, kerberos=kerberos,
-            use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, ldap_timeout=ldap_timeout,
+            use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, schannel=schannel, ldap_timeout=ldap_timeout,
         )
         result["accounts"] = parse_password_not_required(result["stdout"])
         return result
@@ -604,13 +623,14 @@ def register(mcp, get_config) -> None:
         pfx_pass: str | None = None,
         pem_cert: str | None = None,
         pem_key: str | None = None,
+        schannel: bool = False,
         ldap_timeout: int | None = None,
     ) -> dict:
         """List principals with adminCount=1 (protected/privileged) (`--admin-count`)."""
         result = await _ldap_run(
             get_config, ["--admin-count"], targets, username=username, password=password,
             ntlm_hash=ntlm_hash, domain=domain, kerberos=kerberos,
-            use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, ldap_timeout=ldap_timeout,
+            use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, schannel=schannel, ldap_timeout=ldap_timeout,
         )
         result["principals"] = parse_ldap_principals(result["stdout"])
         return result
@@ -637,6 +657,7 @@ def register(mcp, get_config) -> None:
         pfx_pass: str | None = None,
         pem_cert: str | None = None,
         pem_key: str | None = None,
+        schannel: bool = False,
         ldap_timeout: int | None = None,
     ) -> dict:
         """Run a custom LDAP query (`--query <filter> <attributes>`), e.g. for domain trusts.
@@ -668,7 +689,7 @@ def register(mcp, get_config) -> None:
         result = await _ldap_run(
             get_config, ["--query", ldap_filter, " ".join(attr_list)], targets, extra_flags=extra,
             username=username, password=password, ntlm_hash=ntlm_hash, domain=domain,
-            kerberos=kerberos, use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, ldap_timeout=ldap_timeout,
+            kerberos=kerberos, use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, schannel=schannel, ldap_timeout=ldap_timeout,
         )
         result["entries"] = parse_ldap_query(result["stdout"])
         # Numeric AD attributes get their reading NEXT TO the raw value, never instead of it:
@@ -716,6 +737,7 @@ def register(mcp, get_config) -> None:
         pfx_pass: str | None = None,
         pem_cert: str | None = None,
         pem_key: str | None = None,
+        schannel: bool = False,
         ldap_timeout: int | None = None,
     ) -> dict:
         """Resolve a gMSA ID to its account name (`--gmsa-convert-id <id>`). Read-only.
@@ -728,7 +750,7 @@ def register(mcp, get_config) -> None:
         result = await _ldap_run(
             get_config, ["--gmsa-convert-id", gmsa_id], targets, username=username,
             password=password, ntlm_hash=ntlm_hash, domain=domain, kerberos=kerberos,
-            use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, ldap_timeout=ldap_timeout,
+            use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, schannel=schannel, ldap_timeout=ldap_timeout,
         )
         result["gmsa_ids"] = parse_ldap_gmsa_id(result["stdout"])
         return result
@@ -754,6 +776,7 @@ def register(mcp, get_config) -> None:
         pfx_pass: str | None = None,
         pem_cert: str | None = None,
         pem_key: str | None = None,
+        schannel: bool = False,
         ldap_timeout: int | None = None,
     ) -> dict:
         """Run a BloodHound collection against the domain (`--bloodhound -c <collection>`).
@@ -771,7 +794,7 @@ def register(mcp, get_config) -> None:
         result = await _ldap_run(
             get_config, flags, targets, username=username,
             password=password, ntlm_hash=ntlm_hash, domain=domain, kerberos=kerberos,
-            use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, ldap_timeout=ldap_timeout,
+            use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, schannel=schannel, ldap_timeout=ldap_timeout,
         )
         if not dns_server and "could not find a domain controller" in (result.get("stdout") or "").lower():
             dc = targets[0] if targets else "<DC IP>"
@@ -801,6 +824,7 @@ def register(mcp, get_config) -> None:
         pfx_pass: str | None = None,
         pem_cert: str | None = None,
         pem_key: str | None = None,
+        schannel: bool = False,
         ldap_timeout: int | None = None,
     ) -> dict:
         """AS-REP roast: collect crackable hashes for users without Kerberos pre-auth (`--asreproast <file>`).
@@ -814,7 +838,7 @@ def register(mcp, get_config) -> None:
         result = await _ldap_run(
             get_config, ["--asreproast", output_file], targets, offensive=True, dump=True,
             username=username, password=password, ntlm_hash=ntlm_hash, domain=domain,
-            kerberos=kerberos, use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, ldap_timeout=ldap_timeout,
+            kerberos=kerberos, use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, schannel=schannel, ldap_timeout=ldap_timeout,
         )
         result["hashes"] = parse_roast_hashes(result["stdout"])
         result["output_file"] = output_file
@@ -841,6 +865,7 @@ def register(mcp, get_config) -> None:
         pfx_pass: str | None = None,
         pem_cert: str | None = None,
         pem_key: str | None = None,
+        schannel: bool = False,
         ldap_timeout: int | None = None,
     ) -> dict:
         """Kerberoast: collect crackable TGS hashes for SPN accounts (`--kerberoasting <file>`).
@@ -856,7 +881,7 @@ def register(mcp, get_config) -> None:
         result = await _ldap_run(
             get_config, ["--kerberoasting", output_file], targets, offensive=True, dump=True,
             extra_flags=extra, username=username, password=password, ntlm_hash=ntlm_hash,
-            domain=domain, kerberos=kerberos, use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, ldap_timeout=ldap_timeout,
+            domain=domain, kerberos=kerberos, use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, schannel=schannel, ldap_timeout=ldap_timeout,
         )
         result["hashes"] = parse_roast_hashes(result["stdout"])
         result["output_file"] = output_file
@@ -882,6 +907,7 @@ def register(mcp, get_config) -> None:
         pfx_pass: str | None = None,
         pem_cert: str | None = None,
         pem_key: str | None = None,
+        schannel: bool = False,
         ldap_timeout: int | None = None,
     ) -> dict:
         """Targeted kerberoast: temporarily add an SPN to accounts, request a ST, then remove it (`--targeted-kerberoast`).
@@ -894,7 +920,7 @@ def register(mcp, get_config) -> None:
         result = await _ldap_run(
             get_config, ["--targeted-kerberoast", *accounts], targets, offensive=True,
             username=username, password=password, ntlm_hash=ntlm_hash, domain=domain,
-            kerberos=kerberos, use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, ldap_timeout=ldap_timeout,
+            kerberos=kerberos, use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, schannel=schannel, ldap_timeout=ldap_timeout,
         )
         result["hashes"] = parse_roast_hashes(result["stdout"])
         return result
@@ -918,6 +944,7 @@ def register(mcp, get_config) -> None:
         pfx_pass: str | None = None,
         pem_cert: str | None = None,
         pem_key: str | None = None,
+        schannel: bool = False,
         ldap_timeout: int | None = None,
     ) -> dict:
         """Retrieve gMSA managed passwords readable by the account (`--gmsa`).
@@ -927,7 +954,7 @@ def register(mcp, get_config) -> None:
         result = await _ldap_run(
             get_config, ["--gmsa"], targets, offensive=True, dump=True, username=username,
             password=password, ntlm_hash=ntlm_hash, domain=domain, kerberos=kerberos,
-            use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, ldap_timeout=ldap_timeout,
+            use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, schannel=schannel, ldap_timeout=ldap_timeout,
         )
         result["gmsa"] = parse_ldap_gmsa(result["stdout"])
         return result
@@ -952,6 +979,7 @@ def register(mcp, get_config) -> None:
         pfx_pass: str | None = None,
         pem_cert: str | None = None,
         pem_key: str | None = None,
+        schannel: bool = False,
         ldap_timeout: int | None = None,
     ) -> dict:
         """Decrypt a gMSA `_SC_GMSA_…` blob recovered from an LSA dump (`--gmsa-decrypt-lsa <blob>`).
@@ -964,7 +992,7 @@ def register(mcp, get_config) -> None:
         return await _ldap_run(
             get_config, ["--gmsa-decrypt-lsa", blob], targets, offensive=True, dump=True,
             username=username, password=password, ntlm_hash=ntlm_hash, domain=domain,
-            kerberos=kerberos, use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, ldap_timeout=ldap_timeout,
+            kerberos=kerberos, use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, schannel=schannel, ldap_timeout=ldap_timeout,
         )
 
     # ---- Promoted `-M` modules (first-class tools for high-value ldap modules) ---- #
@@ -988,6 +1016,7 @@ def register(mcp, get_config) -> None:
         pfx_pass: str | None = None,
         pem_cert: str | None = None,
         pem_key: str | None = None,
+        schannel: bool = False,
         ldap_timeout: int | None = None,
     ) -> dict:
         """Find ADCS PKI Enrollment Services and certificate template names (`-M adcs`). Read-only.
@@ -999,7 +1028,7 @@ def register(mcp, get_config) -> None:
             get_config, "adcs", targets, offensive=False,
             options={"SERVER": server, "BASE_DN": base_dn},
             username=username, password=password, ntlm_hash=ntlm_hash, domain=domain,
-            kerberos=kerberos, use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, ldap_timeout=ldap_timeout,
+            kerberos=kerberos, use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, schannel=schannel, ldap_timeout=ldap_timeout,
         )
 
     @mcp.tool()
@@ -1017,13 +1046,14 @@ def register(mcp, get_config) -> None:
         pfx_pass: str | None = None,
         pem_cert: str | None = None,
         pem_key: str | None = None,
+        schannel: bool = False,
         ldap_timeout: int | None = None,
     ) -> dict:
         """Find the Entra ID (Azure AD) sync server in the domain (`-M entra-id`). Read-only."""
         return await _ldap_module(
             get_config, "entra-id", targets, offensive=False, username=username,
             password=password, ntlm_hash=ntlm_hash, domain=domain, kerberos=kerberos,
-            use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, ldap_timeout=ldap_timeout,
+            use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, schannel=schannel, ldap_timeout=ldap_timeout,
         )
 
     @mcp.tool()
@@ -1043,6 +1073,7 @@ def register(mcp, get_config) -> None:
         pfx_pass: str | None = None,
         pem_cert: str | None = None,
         pem_key: str | None = None,
+        schannel: bool = False,
         ldap_timeout: int | None = None,
     ) -> dict:
         """Find SCCM infrastructure published in Active Directory (`-M sccm`). Read-only.
@@ -1056,5 +1087,5 @@ def register(mcp, get_config) -> None:
         return await _ldap_module(
             get_config, "sccm", targets, offensive=False, options=options,
             username=username, password=password, ntlm_hash=ntlm_hash, domain=domain,
-            kerberos=kerberos, use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, ldap_timeout=ldap_timeout,
+            kerberos=kerberos, use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, schannel=schannel, ldap_timeout=ldap_timeout,
         )
