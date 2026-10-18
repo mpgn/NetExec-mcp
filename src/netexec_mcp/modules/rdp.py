@@ -36,6 +36,7 @@ async def _rdp_run(
     *,
     offensive: bool = False,
     extra_flags: list[str] | None = None,
+    stdin_input: str | None = None,
     port=None,
     rdp_timeout=None,
     username=None,
@@ -83,7 +84,8 @@ async def _rdp_run(
     if rdp_timeout is not None:
         transport += ["--rdp-timeout", str(rdp_timeout)]
     extra = auth + transport + list(action_flags) + list(extra_flags or [])
-    outcome = await execute(get_config(), "rdp", targets, extra, offensive=offensive, ccache=ccache)
+    outcome = await execute(get_config(), "rdp", targets, extra, offensive=offensive,
+                            ccache=ccache, stdin_input=stdin_input)
     return outcome.to_dict()
 
 
@@ -232,6 +234,11 @@ def register(mcp, get_config) -> None:
         `no_output` to skip output retrieval; `cmd_delay` (`--cmd-delay`) the sleep before
         executing; `clipboard_delay` (`--clipboard-delay`) the clipboard-init wait. The
         command is a single argv token. OFFENSIVE-GATED (NXC_MODE=full).
+
+        nxc prompts on the tty before running ("executing via RDP will disconnect the
+        Windows session [Y/n]") for both `-x` and `-X`. The MCP has no tty, so the
+        confirmation is answered automatically with "y" -- running at NXC_MODE=full is
+        already the operator's opt-in to that disruption.
         """
         if not command or not command.strip():
             raise ValueError("command is required for rdp_exec")
@@ -243,7 +250,8 @@ def register(mcp, get_config) -> None:
         if clipboard_delay is not None:
             flags += ["--clipboard-delay", str(clipboard_delay)]
         return await _rdp_run(
-            get_config, flags, targets, offensive=True, port=port, rdp_timeout=rdp_timeout,
+            get_config, flags, targets, offensive=True, stdin_input="y\n",
+            port=port, rdp_timeout=rdp_timeout,
             username=username, password=password, ntlm_hash=ntlm_hash, domain=domain,
             local_auth=local_auth, kerberos=kerberos, use_kcache=use_kcache, cred_id=cred_id,
             kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert,
