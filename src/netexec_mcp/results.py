@@ -860,6 +860,43 @@ def _classify_lsa_secret(content: str, host: str) -> dict | None:
     return None
 
 
+def parse_reauth_swap(text: str) -> list[dict]:
+    """Parse `nxc smb -M reauth_swap` output into a per-host verdict list.
+
+    The module reports whether a server still allows a cross-user re-auth swap on an SMB
+    session (a posture signal for enforced SMB signing). Each record is
+    `{host, verdict, detail}` with verdict one of: ``vulnerable`` (swap allowed),
+    ``not_vulnerable`` (swap refused, same-user re-auth only), ``inconclusive`` (unexpected
+    session-setup status) or ``skipped`` (signing not enforced, nothing to probe). Keyed on
+    the message phrasing, not the marker, since the positive result is a highlight (no
+    marker) while the negatives are display lines.
+    """
+    out: list[dict] = []
+    for raw in (text or "").splitlines():
+        if not raw.strip():
+            continue
+        prefix = _PREFIX_RE.match(raw)
+        if not prefix:
+            continue
+        payload = raw[prefix.end():].strip()
+        mk = _MARKER_RE.match(payload)
+        if mk:
+            payload = mk["message"].strip()
+        low = payload.lower()
+        if "enforced smb signing bypassable" in low:
+            verdict = "vulnerable"
+        elif "not vulnerable" in low or "re-auth swap refused" in low:
+            verdict = "not_vulnerable"
+        elif "inconclusive" in low:
+            verdict = "inconclusive"
+        elif "signing not enforced" in low or "nothing to bypass" in low:
+            verdict = "skipped"
+        else:
+            continue
+        out.append({"host": prefix["host"], "verdict": verdict, "detail": payload})
+    return out
+
+
 def parse_lsa_secrets(text: str) -> list[dict]:
     """Parse `nxc smb --lsa` output into structured credential records.
 
