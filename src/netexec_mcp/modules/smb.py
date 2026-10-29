@@ -25,6 +25,7 @@ from ..results import (
     parse_hosts_file,
     parse_lsa_secrets,
     parse_pass_pol,
+    parse_reauth_swap,
     parse_rid_brute,
     parse_secretsdump,
     parse_shares,
@@ -1712,6 +1713,56 @@ def register(mcp, get_config) -> None:
             local_auth=local_auth, kerberos=kerberos, use_kcache=use_kcache,
             cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key,
         )
+
+    @mcp.tool()
+    async def smb_reauth_swap(
+        targets: list[str],
+        probe_user: str,
+        probe_pass: str | None = None,
+        probe_nthash: str | None = None,
+        username: str | None = None, password: str | None = None,
+        ntlm_hash: str | None = None, domain: str | None = None, local_auth: bool = False,
+        kerberos: bool = False, use_kcache: bool = False, cred_id: int | None = None,
+        laps: str | None = None,
+        kdc_host: str | None = None,
+        aes_key: str | None = None,
+        ccache: str | None = None,
+        pfx_cert: str | None = None,
+        pfx_base64: str | None = None,
+        pfx_pass: str | None = None,
+        pem_cert: str | None = None,
+        pem_key: str | None = None,
+    ) -> dict:
+        """Check whether an SMB server allows a cross-user re-auth swap (`-M reauth_swap`).
+
+        A posture check for enforced SMB signing: the server is probed to see whether a
+        session opened as one account can re-authenticate as a *different* account on the
+        same connection. Recent Windows refuses that swap (ACCESS_DENIED, same-user re-auth
+        only); a server that still allows it leaves enforced signing bypassable. Read-only
+        (recon): it only drives session setup, nothing is written or executed.
+
+        Needs a SECOND account, distinct from the login account, via `probe_user` plus
+        `probe_pass` or `probe_nthash` (the second account's privileges do not matter). The
+        result is in a structured `reauth_swap` list: `{host, verdict, detail}` with verdict
+        `vulnerable` / `not_vulnerable` / `inconclusive` / `skipped` (signing not enforced).
+        """
+        if not probe_user or not probe_user.strip():
+            raise ValueError(
+                "probe_user is required for smb_reauth_swap: a second account, distinct "
+                "from the login account (only a cross-user swap is refused, so the same "
+                "account tests nothing)."
+            )
+        if not (probe_pass or probe_nthash):
+            raise ValueError("smb_reauth_swap needs probe_pass or probe_nthash for the second account.")
+        options = {"PROBE_USER": probe_user, "PROBE_PASS": probe_pass, "PROBE_NTHASH": probe_nthash}
+        result = await _run_module(
+            get_config, "reauth_swap", targets, offensive=False, options=options,
+            username=username, password=password, ntlm_hash=ntlm_hash, domain=domain,
+            local_auth=local_auth, kerberos=kerberos, use_kcache=use_kcache,
+            cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key,
+        )
+        result["reauth_swap"] = parse_reauth_swap(result["stdout"])
+        return result
 
     @mcp.tool()
     async def smb_gpp_password(
