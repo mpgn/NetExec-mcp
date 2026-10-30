@@ -70,7 +70,8 @@ succeed — change the credential/ticket, don't loop. `stdout` may be capped wit
 `stdout_truncated:true` when a structured field already carries the parsed data.
 A result lists `outcome_class`/`verdict` first and the raw `stdout` last; `resolved` is
 the command that ran, and fields left at their default (`op_error`, `timed_out`,
-`stderr`, ...) are omitted.
+`stderr`, ...) are omitted. When present, `log_file` is a local file holding the call's
+full raw output.
 """
 
 _WORKFLOWS = """# Common workflows

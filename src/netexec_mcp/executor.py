@@ -23,8 +23,11 @@ import shlex
 import signal
 import socket
 import subprocess
+import sys
+import uuid
 from collections import Counter
 from dataclasses import asdict, dataclass, field
+from datetime import datetime
 
 from .config import Config
 from .guardrails import (
@@ -284,9 +287,33 @@ class ExecOutcome:
     outcome_class: str = ""           # success | guest_only | auth_failed | op_error | benign_empty | ok
     op_error: str | None = None       # a known-terminal error class (retrying as-is will not help)
     op_error_note: str | None = None  # one-line actionable note for that terminal error
+    # This call's nxc `--log` file when NXC_LOG_DIR is set: the full raw output on disk.
+    log_file: str | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+def _new_log_file(log_dir: str | None, tool: str | None) -> str | None:
+    """Pre-create this call's nxc log file under NXC_LOG_DIR, or None when logging is off.
+
+    nxc appends to an existing file, so creating it first (0600, in a 0700 dir) fixes the
+    permissions: the log holds the argv (secrets included) and everything nxc printed. A
+    failure here never blocks the call -- it runs without `--log` and says so on stderr."""
+    if not log_dir:
+        return None
+    try:
+        directory = os.path.abspath(os.path.expanduser(log_dir))
+        os.makedirs(directory, mode=0o700, exist_ok=True)
+        name = re.sub(r"[^A-Za-z0-9_]", "_", tool or "nxc")
+        path = os.path.join(
+            directory, f"{datetime.now():%Y%m%d-%H%M%S}-{name}-{uuid.uuid4().hex[:8]}.log")
+        os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
+        return path
+    except OSError as exc:
+        print(f"[netexec-mcp] NXC_LOG_DIR: cannot create a log file ({exc}); "
+              "running this call without --log", file=sys.stderr)
+        return None
 
 
 # --- auth nudge ---------------------------------------------------------------
@@ -464,7 +491,12 @@ async def execute(
         return ExecOutcome(command=argv, resolved=resolved, dry_run=True)
 
     env = {"KRB5CCNAME": os.path.expanduser(ccache)} if ccache else None
-    result = await run_async(argv, config.timeout, env=env, stdin_input=stdin_input)
+    # Per-call nxc log (NXC_LOG_DIR): appended to the argv that RUNS only, so `command` /
+    # `resolved` stay the command as requested and `log_file` says where the output went.
+    # A raw command that already passes its own --log keeps it.
+    log_file = None if "--log" in argv else _new_log_file(config.log_dir, _current_tool.get())
+    run_argv = [*argv, "--log", log_file] if log_file else argv
+    result = await run_async(run_argv, config.timeout, env=env, stdin_input=stdin_input)
     records = parse_markers(result.stdout, config.pwn3d_label)
     counts = dict(Counter(r.status for r in records))
     unparsed_lines = count_unmarked_lines(result.stdout)
@@ -478,6 +510,7 @@ async def execute(
             "outcome": "executed",
             "returncode": result.returncode,
             "timed_out": result.timed_out,
+            **({"log_file": log_file} if log_file else {}),
         },
     )
     return ExecOutcome(
@@ -495,4 +528,5 @@ async def execute(
         outcome_class=outcome_class,
         op_error=op_error,
         op_error_note=op_error_note,
+        log_file=log_file,
     )

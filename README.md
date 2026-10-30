@@ -123,6 +123,7 @@ Four escalating levels of how much the server is allowed to *do*:
 | `NXC_TIMEOUT` | Per-call timeout (seconds). | `300` |
 | `NXC_MAX_TARGETS` | Max target tokens per call. | `256` |
 | `NXC_AUDIT_LOG` | Path to an append-only JSONL audit log. | _(none)_ |
+| `NXC_LOG_DIR` | Directory for one nxc log per executed call (nxc's `--log`): the full raw output, kept even when the model-facing `stdout` is capped. Each file is created `0600` (directory `0700`); its path is returned as `log_file` and recorded in the audit log. **Holds secrets** (the argv and anything dumped). | _(none)_ |
 | `NXC_WORKSPACE` | nxc workspace the `workspace_*` readers look in. **Read-side only** — it does _not_ change where nxc writes (nxc takes its workspace from `nxc.conf`, which this does not touch). To isolate a run, set `NXC_PATH`, not this. | _(none — reads nxc.conf's `workspace`, else `default`)_ |
 | `NXC_PATH` | Override nxc's home dir (mirrors nxc's own `NXC_PATH`). Inherited by the nxc subprocess, so it sets where nxc **writes** (`nxc.conf`, `workspaces/*.db`) **and** where the MCP **reads** — both sides agree on one home. | `~/.nxc` |
 
