@@ -267,10 +267,11 @@ def trim_for_model(payload: dict, cap: int = _STDOUT_CAP) -> dict:
     With NO structured field, `stdout` is the only copy of the signal (see
     ``count_unmarked_lines``) and is left intact. Pure and defensive -- never raises, and
     applied only at the model boundary so ``to_dict()`` and every direct caller/test keep full
-    fidelity.
+    fidelity. Idempotent: an already-capped payload is returned as is (in dynamic mode the
+    view runs on both the inner tool call and the outer ``nxc_call``).
     """
     try:
-        if not isinstance(payload, dict):
+        if not isinstance(payload, dict) or payload.get("stdout_truncated"):
             return payload
         stdout = payload.get("stdout")
         if not isinstance(stdout, str) or len(stdout) <= cap:
@@ -289,6 +290,49 @@ def trim_for_model(payload: dict, cap: int = _STDOUT_CAP) -> dict:
         )
         out["stdout_truncated"] = True
         return out
+    except Exception:
+        return payload
+
+
+# Model-view key order: what the caller needs first (the outcome, then what ran) at the head,
+# the bulky raw fields at the tail, so a client that keeps only the head of a long result still
+# sees the verdict, and parsed fields come before the raw `stdout` they were parsed from.
+_VIEW_HEAD = ("_note", "outcome_class", "verdict", "op_error", "op_error_note", "auth_suggestion",
+              "resolved", "returncode", "timed_out", "dry_run")
+_VIEW_TAIL = ("unparsed_lines", "counts", "records", "stderr", "stdout_truncated", "stdout_bytes",
+              "stdout")
+# ExecOutcome fields that only carry information when set: dropped at their empty default.
+_VIEW_DROP_IF_EMPTY = frozenset({"auth_suggestion", "op_error", "op_error_note", "timed_out",
+                                 "dry_run", "stderr"})
+
+
+def _is_empty_default(value) -> bool:
+    return value is None or value is False or value == ""
+
+
+def model_view(payload: dict) -> dict:
+    """The MODEL-FACING form of a tool result dict (applied by the server's view middleware).
+
+    On top of :func:`trim_for_model`: drops ``command`` when ``resolved`` carries the same argv
+    as one shell-quoted string, drops the ExecOutcome fields left at their empty default
+    (``op_error: null``, ``timed_out: false``, ``stderr: ""``...), and orders keys head-first
+    (see ``_VIEW_HEAD``/``_VIEW_TAIL``). Dicts that are not tool results (meta-tools, errors)
+    keep their keys and order. Pure, idempotent and defensive -- never raises; ``to_dict()``
+    and the audit log keep every field.
+    """
+    try:
+        if not isinstance(payload, dict):
+            return payload
+        out = trim_for_model(payload)
+        out = {
+            k: v for k, v in out.items()
+            if not (k == "command" and "resolved" in out)
+            and not (k in _VIEW_DROP_IF_EMPTY and _is_empty_default(v))
+        }
+        head = [k for k in _VIEW_HEAD if k in out]
+        tail = [k for k in _VIEW_TAIL if k in out]
+        edges = set(head) | set(tail)
+        return {k: out[k] for k in (*head, *(k for k in out if k not in edges), *tail)}
     except Exception:
         return payload
 

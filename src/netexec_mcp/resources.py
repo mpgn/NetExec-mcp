@@ -68,6 +68,9 @@ returncode-0 call with nothing is `benign_empty`, not a failure. When `op_error`
 (e.g. a revoked/wrong-realm ticket, DCSync denied), retrying the same call will not
 succeed — change the credential/ticket, don't loop. `stdout` may be capped with
 `stdout_truncated:true` when a structured field already carries the parsed data.
+A result lists `outcome_class`/`verdict` first and the raw `stdout` last; `resolved` is
+the command that ran, and fields left at their default (`op_error`, `timed_out`,
+`stderr`, ...) are omitted.
 """
 
 _WORKFLOWS = """# Common workflows
