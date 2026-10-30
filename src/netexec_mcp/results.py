@@ -284,9 +284,10 @@ def trim_for_model(payload: dict, cap: int = _STDOUT_CAP) -> dict:
             return payload
         out = dict(payload)
         out["stdout_bytes"] = len(stdout)
+        full = f"; full output in {payload['log_file']}" if payload.get("log_file") else ""
         out["stdout"] = (
             stdout[:cap]
-            + f"\n...[truncated {len(stdout) - cap} chars; structured fields above carry the parsed data]"
+            + f"\n...[truncated {len(stdout) - cap} chars; structured fields above carry the parsed data{full}]"
         )
         out["stdout_truncated"] = True
         return out
@@ -299,11 +300,11 @@ def trim_for_model(payload: dict, cap: int = _STDOUT_CAP) -> dict:
 # sees the verdict, and parsed fields come before the raw `stdout` they were parsed from.
 _VIEW_HEAD = ("_note", "outcome_class", "verdict", "op_error", "op_error_note", "auth_suggestion",
               "resolved", "returncode", "timed_out", "dry_run")
-_VIEW_TAIL = ("unparsed_lines", "counts", "records", "stderr", "stdout_truncated", "stdout_bytes",
-              "stdout")
+_VIEW_TAIL = ("unparsed_lines", "counts", "records", "stderr", "log_file", "stdout_truncated",
+              "stdout_bytes", "stdout")
 # ExecOutcome fields that only carry information when set: dropped at their empty default.
 _VIEW_DROP_IF_EMPTY = frozenset({"auth_suggestion", "op_error", "op_error_note", "timed_out",
-                                 "dry_run", "stderr"})
+                                 "dry_run", "stderr", "log_file"})
 
 
 def _is_empty_default(value) -> bool:

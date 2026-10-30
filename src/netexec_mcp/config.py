@@ -247,6 +247,9 @@ class Config:
     # <nxc_home>/downloads, which is NXC_PATH-isolated per run. Added last with a default so
     # existing Config(**...) constructions in tests keep working.
     downloads_dir: str | None = None
+    # NXC_LOG_DIR: when set, every executed call gets its own nxc `--log` file here (the full
+    # raw output, kept even when the model-facing stdout is capped). None -> no per-call log.
+    log_dir: str | None = None
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -271,4 +274,5 @@ class Config:
             tool_mode=_resolve_tool_mode(),
             pwn3d_label=conf["pwn3d_label"],
             downloads_dir=os.environ.get("NXC_DOWNLOADS_DIR") or None,
+            log_dir=os.environ.get("NXC_LOG_DIR") or None,
         )
