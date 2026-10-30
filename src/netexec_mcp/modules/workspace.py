@@ -135,12 +135,16 @@ def read_hosts(path: Path) -> list[dict]:
         con.close()
 
 
-def read_creds(path: Path, proto: str, reveal: bool) -> list[dict]:
+def read_creds(path: Path, proto: str, reveal: bool,
+               username: str | None = None, credtype: str | None = None) -> list[dict]:
     """Principal/credential rows `{domain?, username, credtype, secret}`. `secret` (the
     stored password/hash) is revealed only when `reveal`; otherwise nulled with
     `redacted: true`. The DB row id is NOT surfaced: nxc's ``-id`` is per-protocol, so an
     id would name a different account under another protocol -- reuse goes by
-    username + secret (+ domain) instead."""
+    username + secret (+ domain) instead. `username` / `credtype` keep only the matching
+    rows (exact, case-insensitive)."""
+    want_user = username.strip().lower() if username and username.strip() else None
+    want_type = credtype.strip().lower() if credtype and credtype.strip() else None
     if proto not in _BINDINGS:
         return []
     table, _ = _BINDINGS[proto]
@@ -152,6 +156,10 @@ def read_creds(path: Path, proto: str, reveal: bool) -> list[dict]:
         sel = [c for c in cols if c not in {"id", "pillaged_from_hostid"}]
         rows = [dict(r) for r in con.execute(
             f"SELECT {', '.join(sel)} FROM {table} ORDER BY username").fetchall()]
+        if want_user:
+            rows = [r for r in rows if (r.get("username") or "").lower() == want_user]
+        if want_type:
+            rows = [r for r in rows if (r.get("credtype") or "").lower() == want_type]
         for r in rows:
             if "password" in r:
                 r["secret"] = r.pop("password")
@@ -276,9 +284,7 @@ def match_stored_cred(config, proto: str, username: str) -> list[dict]:
     path = db_path(resolve_workspace(config), proto)
     if not path.exists():
         return []
-    want = username.strip().lower()
-    return [c for c in read_creds(path, proto, reveal=True)
-            if (c.get("username") or "").lower() == want]
+    return read_creds(path, proto, reveal=True, username=username)
 
 
 # --- tool envelope + registration ---------------------------------------------
@@ -383,12 +389,20 @@ def register(mcp, get_config) -> None:
         )
 
     @mcp.tool()
-    async def workspace_creds(protocol: str = "smb", workspace: str | None = None) -> dict:
+    async def workspace_creds(
+        protocol: str = "smb",
+        workspace: str | None = None,
+        username: str | None = None,
+        credtype: str | None = None,
+    ) -> dict:
         """Credentials already collected into a protocol's workspace DB (no target).
 
         Reads the principal table (`users`, or `credentials` for ssh):
-        `{domain?, username, credtype, secret}`. The stored `secret` (password or hash) is
-        returned in EVERY mode: reading nxc's own workspace DB is a LOCAL file read, not an
+        `{domain?, username, credtype, secret}`. After an NTDS dump this table holds every
+        domain account, so filter instead of listing it all: `username` keeps one account
+        (exact, case-insensitive, e.g. "krbtgt"), `credtype` keeps one kind ("plaintext" or
+        "hash"). The stored `secret` (password or hash) is returned in EVERY mode: reading
+        nxc's own workspace DB is a LOCAL file read, not an
         action against a target, so the recon<loot<full gate (which governs target-side
         actions -- dumping/exec) does not apply. Reuse a listed account by passing its
         `username` + `secret` to a tool (as `password=`, or `ntlm_hash=` when
@@ -402,7 +416,8 @@ def register(mcp, get_config) -> None:
         # (that ladder governs what nxc does TO a target). Always return the stored secret
         # -- it is often one the caller supplied, and the file is locally readable anyway.
         result = _envelope(cfg, workspace, protocol, "credentials",
-                           lambda p: read_creds(p, protocol, reveal=True))
+                           lambda p: read_creds(p, protocol, reveal=True,
+                                                username=username, credtype=credtype))
         result["revealed"] = True
         return result
 
