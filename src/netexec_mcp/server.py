@@ -16,9 +16,12 @@ import sys
 
 from fastmcp import FastMCP
 from fastmcp.server.middleware import Middleware
+from fastmcp.tools import ToolResult
+from mcp.types import TextContent
 
 from .config import Config, ConfigError, nxc_home
 from .executor import _folded_args, parse_version, reset_current_tool, run, set_current_tool
+from .results import model_view
 from . import dynamic, meta, resources
 from .modules import register_enabled, workspace
 
@@ -39,6 +42,27 @@ class ToolAuditMiddleware(Middleware):
             return await call_next(context)
         finally:
             reset_current_tool(token)
+
+
+class ModelViewMiddleware(Middleware):
+    """The single model boundary: rewrite every tool result into its ``model_view`` (capped
+    redundant stdout, no duplicate argv, verdict first), in BOTH tool modes. Rebuilds both the
+    ``structuredContent`` and the serialized-JSON text block, so whichever one a client hands
+    its model is the same view. Only touches results whose content is that JSON text (a dict
+    return); anything else passes through. In dynamic mode the inner ``mcp.call_tool`` of
+    ``nxc_call`` re-enters this hook, so the view runs twice there -- it is idempotent."""
+
+    async def on_call_tool(self, context, call_next):
+        result = await call_next(context)
+        sc = getattr(result, "structured_content", None)
+        if not isinstance(sc, dict) or not all(
+            isinstance(block, TextContent) for block in (result.content or [])
+        ):
+            return result
+        view = model_view(sc)
+        if list(view.items()) == list(sc.items()):
+            return result
+        return ToolResult(structured_content=view, meta=result.meta, is_error=result.is_error)
 
 
 # Keys that only ever appear in a JSON Schema, never in a real argument payload.
@@ -241,11 +265,13 @@ def main() -> None:
     if skipped:
         print(f"[netexec-mcp] enabled but not yet implemented: {', '.join(skipped)}", file=sys.stderr)
 
-    # Repair schema-echo argument payloads before validation (both modes), then record the
-    # issuing tool on every audited command. Both only hook on_call_tool, so they don't
-    # affect tool listing; both are added before the dynamic middleware.
+    # Repair schema-echo argument payloads before validation (both modes), record the issuing
+    # tool on every audited command, then rewrite each result into its model view. All three
+    # only hook on_call_tool, so they don't affect tool listing; all are added before the
+    # dynamic middleware.
     mcp.add_middleware(NormalizeArgsMiddleware())
     mcp.add_middleware(ToolAuditMiddleware())
+    mcp.add_middleware(ModelViewMiddleware())
 
     if config.tool_mode == "dynamic":
         # Snapshot the full tool surface BEFORE installing the hiding middleware -- the

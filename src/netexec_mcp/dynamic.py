@@ -38,7 +38,6 @@ from fastmcp.exceptions import ToolError
 from fastmcp.server.middleware import Middleware
 
 from .executor import _folded_args
-from .results import trim_for_model
 
 # Tools that stay visible in dynamic mode: the meta-tools + the health check.
 DYNAMIC_VISIBLE = frozenset(
@@ -880,10 +879,8 @@ def register(mcp, get_config, index) -> None:
         folded = _folded_args.get()
 
         def _out(d):
-            # Model-facing output cap: when a structured field already carries the signal,
-            # drop the redundant raw stdout (keeps to_dict / direct callers full-fidelity).
-            if isinstance(d, dict):
-                d = trim_for_model(d)
+            # The model view (stdout cap, key order) is applied by server.ModelViewMiddleware,
+            # on the inner tool call and again on this nxc_call result -- not here.
             # If the middleware un-flattened this call, hint the model to nest next time.
             if folded and isinstance(d, dict) and "_note" not in d:
                 return {**d, "_note": (
