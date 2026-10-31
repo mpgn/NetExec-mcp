@@ -318,9 +318,10 @@ def register(mcp, get_config) -> None:
         pem_cert: str | None = None,
         pem_key: str | None = None,
     ) -> dict:
-        """Run a command on the target via MSSQL (`-x`, or `-X` for PowerShell).
+        """Run a command on the target via MSSQL xp_cmdshell (`-x`, or `-X` for PowerShell).
 
-        Executes through mssqlexec (xp_cmdshell / sp_OACreate style). Set `use_powershell`
+        Executes through mssqlexec, which enables xp_cmdshell for the call and restores its
+        previous state afterwards. Set `use_powershell`
         to run `command` as PowerShell (`-X`); `no_output` to skip output retrieval;
         `force_ps32` to run PowerShell in a 32-bit process (`--force-ps32`). The command is
         a single argv token. OFFENSIVE-GATED (NXC_MODE=full): also requires the login to

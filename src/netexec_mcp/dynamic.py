@@ -138,7 +138,15 @@ def build_index(tools, modules=None) -> list[ToolEntry]:
                 required=list(params.get("required", [])),
             )
         )
+    tool_names = {e.name for e in entries}
     for m in (modules or []):
+        # A promoted module is its curated tool's own engine (smb_nopac runs -M nopac, with the
+        # same options and gate). Indexed too, the bare module outranked its wrapper on an exact
+        # name hit, so it is skipped -- on every protocol nxc lists it for (zerologon and spooler
+        # also appear under wmi). nxc_run_module still runs it.
+        wrapped = (m.get("name") or "").replace("-", "_")
+        if any(f"{p}_{wrapped}" in tool_names for p in _KNOWN_PREFIXES):
+            continue
         desc = m.get("description") or ""
         entries.append(
             ToolEntry(
@@ -187,6 +195,12 @@ _SYNONYMS = {
     "edr": ("av",),
     "collected": ("creds",),
     "harvested": ("creds",),
+    # DCSync is how secretsdump pulls NTDS over DRSUAPI: the word returned nothing at all.
+    "dcsync": ("ntds",),
+    # fine-grained password policies are PSOs (q_join drops the hyphen of "fine-grained")
+    "fine grained": ("pso",),
+    "finegrained": ("pso",),
+    "fgpp": ("pso",),
 }
 
 
@@ -198,6 +212,11 @@ _SYNONYMS = {
 _TOKEN_SYNONYMS = {
     "ou": ("ous", "organizational"),
     "organizational": ("ous", "ou"),
+    # Domain trusts are listed by ldap_dc_list, but "trust" prefix-matches the name-part
+    # "trusted" of ldap_trusted_for_delegation (a different subject) and led with it. Whole
+    # words only, so "trusted" itself keeps pointing at delegation.
+    "trust": ("dc", "list"),
+    "trusts": ("dc", "list"),
 }
 
 
@@ -241,6 +260,26 @@ _STOPWORDS = frozenset({
 })
 
 
+# Split points inside a camelCase word: before an Upper+lower pair (pwd|Not|Required,
+# sAM|Account|Name). An all-caps acronym (gMSA, NTDS) has no such pair and stays whole.
+_CAMEL_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z][a-z])|(?<=[A-Z])(?=[A-Z][a-z])")
+
+
+def _query_words(query: str) -> list[str]:
+    """The lowercased words of a query. A camelCase LDAP attribute (pwdNotRequired,
+    userAccountControl) also yields its parts -- whole, it matched nothing -- and the word
+    itself is kept."""
+    words = _WORD_RE.findall((query or "").lower())
+    for w in re.findall(r"[A-Za-z0-9]+", query or ""):
+        parts = _CAMEL_RE.split(w)
+        if len(parts) < 2:
+            continue
+        for part in parts:
+            if part.lower() not in words:
+                words.append(part.lower())
+    return words
+
+
 def _words(text: str) -> set[str]:
     """Word set of a string; hyphen is a SEPARATOR here (who-is-admin -> {who,is,admin})."""
     return set(_WORD_RE.findall((text or "").lower()))
@@ -250,14 +289,22 @@ def _part_match(tok: str, parts: set[str]) -> bool:
     """token vs a name/summary word set, tolerant to plural/prefix. Handles both plurals
     (share ~ shares, database ~ databases) and short abbreviations against the real
     3-char tool-name stems (rid ~ rids, lsa ~ lsass). Min 3 chars so 1-2 char tokens
-    ("a", "id") stay exact-only and don't over-match."""
+    ("a", "id") stay exact-only and don't over-match. A stopword part never prefix-matches:
+    it carries no intent, yet "enumeration" hit every `enum` name-part and "force"/"forest"
+    the `for` of ldap_trusted_for_delegation."""
     if tok in parts:
         return True
     if len(tok) >= 3:
         for p in parts:
-            if len(p) >= 3 and (tok.startswith(p) or p.startswith(tok)):
+            if len(p) >= 3 and p not in _STOPWORDS and (tok.startswith(p) or p.startswith(tok)
+                                                       or _y_plural(tok, p) or _y_plural(p, tok)):
                 return True
     return False
+
+
+def _y_plural(word: str, other: str) -> bool:
+    """policy ~ policies: the one plural a shared prefix misses ("polic" is neither word)."""
+    return word.endswith("y") and other == word[:-1] + "ies"
 
 
 def _stem_token(tok: str) -> str:
@@ -270,8 +317,16 @@ def _stem_token(tok: str) -> str:
     far too low against `workspace_admins` / `*_admin_*` and the admin reader was invisible.
     Folding any admin* token to "admin" lets it prefix-match every admin name-part at full
     weight. (Real Cline+qwen14b miss: "which hosts have administrative access, with which
-    account" surfaced host-inventory tools, never `workspace_admins`.)"""
-    return "admin" if tok.startswith("admin") else tok
+    account" surfaced host-inventory tools, never `workspace_admins`.)
+
+    Plus whole-word aliases in `_TOKEN_FOLDS`."""
+    return "admin" if tok.startswith("admin") else _TOKEN_FOLDS.get(tok, tok)
+
+
+# Whole-word aliases folded at FULL weight (a synonym only adds at _SYN_W). "hashdump" is
+# meterpreter's SAM dump; as one word it prefix-matched the name-part `hash` and led with
+# dpapi_hash / hash_spider (2026-10-31).
+_TOKEN_FOLDS = {"hashdump": "sam"}
 
 
 def _score(entry: ToolEntry, tokens: list[str], expanded: list[str]) -> float:
@@ -310,7 +365,7 @@ def search_scored(index, query: str, protocol: str | None = None,
     module long-tail rather than let the model give up)."""
     proto = protocol.strip().lower() if protocol else None
     q_join = (query or "").lower().replace("-", "")   # for synonym detection (as-rep -> asrep)
-    raw = _WORD_RE.findall((query or "").lower())
+    raw = _query_words(query)
     tokens = [t for t in raw if t not in _STOPWORDS] or raw   # keep raw if all-stopword
     tokens = [_stem_token(t) for t in tokens]                 # fold admin* -> admin, etc.
     expanded = list(dict.fromkeys(e for e in _expand(q_join, raw) if e not in tokens))
@@ -327,8 +382,40 @@ def search_scored(index, query: str, protocol: str | None = None,
                 s *= _PROTO_BOOST
         if s > 0:
             scored.append((s, e))
-    scored.sort(key=lambda se: (-se[0], se[1].name))
-    return scored[: max(1, limit)]
+    if has_query:
+        scored = _demote_modules(scored, tokens)
+    # A tool wins an exact tie with a module: it returns parsed fields and takes typed params.
+    scored.sort(key=lambda se: (-se[0], se[1].kind == "module", se[1].name))
+    out: list[tuple[float, ToolEntry]] = []
+    seen_modules: set[str] = set()
+    for s, e in scored:
+        if e.kind == "module":
+            # One slot per module: nxc lists the same -M under several protocols (dpapi_hash x4
+            # filled half the top 8). The best-scoring copy stays, so a protocol hint picks it.
+            if e.name in seen_modules:
+                continue
+            seen_modules.add(e.name)
+        out.append((s, e))
+        if len(out) >= max(1, limit):
+            break
+    return out
+
+
+# A module that matches fewer query words strongly than the best-matching tool has its score cut
+# by this factor. Without it a module led on synonym and description words alone: "dump the local SAM
+# hashes" ranked dpapi_hash first and smb_sam 8th.
+_MODULE_DEMOTE = 0.5
+
+
+def _demote_modules(scored: list[tuple[float, ToolEntry]],
+                    tokens: list[str]) -> list[tuple[float, ToolEntry]]:
+    """Demote the modules that answer the query's own words less well than some tool does.
+
+    A module still leads when it matches as many words strongly as every tool, so a named
+    one (raisechild, ntdsutil) or a capability no tool covers keeps the top slot."""
+    bar = max((_token_hits(e, tokens)[1] for _, e in scored if e.kind == "tool"), default=0)
+    return [(s * _MODULE_DEMOTE if e.kind == "module" and _token_hits(e, tokens)[1] < bar else s, e)
+            for s, e in scored]
 
 
 def search(index, query: str, protocol: str | None = None, limit: int = 8) -> list[ToolEntry]:
@@ -368,7 +455,7 @@ _NOT_IMPLEMENTED = (
 
 def _literal_tokens(query: str) -> list[str]:
     """The literal query tokens as the scorer sees them (stopworded + stemmed)."""
-    raw = _WORD_RE.findall((query or "").lower())
+    raw = _query_words(query)
     toks = [t for t in raw if t not in _STOPWORDS] or raw
     return [_stem_token(t) for t in toks]
 
@@ -378,7 +465,7 @@ def _confidence_tokens(query: str) -> tuple[list[str], list[str]]:
     count synonym hits too, or a match ranked #1 BY a synonym (e.g. whoami->exec -> winrm_exec)
     is wrongly flagged low-confidence."""
     q_join = (query or "").lower().replace("-", "")
-    raw = _WORD_RE.findall((query or "").lower())
+    raw = _query_words(query)
     lit = [_stem_token(t) for t in ([t for t in raw if t not in _STOPWORDS] or raw)]
     exp = list(dict.fromkeys(e for e in _expand(q_join, raw) if e not in lit))
     return lit, exp
@@ -476,7 +563,10 @@ def _capability_suggest(name, index, by_protocol, n: int = 5) -> dict:
     ldap_dc_list and 'smb_enum_cve' -> the vuln tools, which difflib over names never finds.
     Adds a protocol_note when the name targets a known protocol that is not enabled here."""
     q = _name_to_query(name)
-    hits = [e.name for e in search(index, q, limit=n) if getattr(e, "kind", "tool") == "tool"]
+    # Rank the tools only: filtering AFTER the limit let -M modules take the slots, and the
+    # suggestion list came back short or empty (26 of 149 invented bench names, 2026-10-31).
+    tools = [e for e in index if getattr(e, "kind", "tool") == "tool"]
+    hits = [e.name for e in search(tools, q, limit=n)]
     out = {"suggestions": hits}
     head = (name or "").split("_", 1)[0].lower()
     # 'nxc'/'workspace' are meta groups, not wire protocols -> never a "protocol not exposed" note.
@@ -650,7 +740,7 @@ def register(mcp, get_config, index) -> None:
                 # was unsupported -- even though ldap_asreproast was already the #1 find_tool
                 # hit. Redirect: surface the tools that MATCH the bogus name as suggestions.
                 valid = ", ".join(sorted(by_protocol))
-                sugg = [e for e in search(index, proto, limit=8) if e.kind == "tool"][:5]
+                sugg = search([e for e in index if e.kind == "tool"], proto, limit=5)
                 if sugg:
                     out["suggestions"] = [{"name": s.name, "summary": s.summary} for s in sugg]
                     out["note"] = (
