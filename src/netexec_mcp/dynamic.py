@@ -357,8 +357,10 @@ def _stem_token(tok: str) -> str:
 
 # Whole-word aliases folded at FULL weight (a synonym only adds at _SYN_W). "hashdump" is
 # meterpreter's SAM dump; as one word it prefix-matched the name-part `hash` and led with
-# dpapi_hash / hash_spider (2026-10-31).
-_TOKEN_FOLDS = {"hashdump": "sam"}
+# dpapi_hash / hash_spider (2026-10-31). "linked" prefix-matches the module name-part `link`
+# but not `links`, so every "linked servers" query led with exec_on_link/link_enable_cmdshell
+# (state-changing in full mode) above mssql_enum_links; as "links" it reaches both.
+_TOKEN_FOLDS = {"hashdump": "sam", "linked": "links"}
 
 
 def _score(entry: ToolEntry, tokens: list[str], expanded: list[str]) -> float:
@@ -452,16 +454,19 @@ def _capability(e: ToolEntry) -> str:
 def _sort_ranked(scored: list[tuple[float, ToolEntry]]) -> None:
     """Order by score; break exact ties in place.
 
-    A tool wins a tie with a module: it returns parsed fields and takes typed params. Within a
-    tie, one capability offered by several protocols comes in DEFAULT_PROTOCOLS order, smb first
-    -- on the alphabet "dump sam" led with mssql_sam and a bare "exec" with mssql_exec. Different
-    capabilities keep their alphabetical order (no smb_local_groups over ldap_groups)."""
+    A tool wins a tie with a module: it returns parsed fields and takes typed params. Among
+    tools, a protocol's `enum_hosts` wins a tie: a query that cannot tell the tools apart starts
+    with the read-only entry point (a bare "mssql" was an 8-way tie handed to mssql_db_hash, a
+    credential dump, on the alphabet). Within a tie, one capability offered by several protocols
+    comes in DEFAULT_PROTOCOLS order, smb first -- on the alphabet "dump sam" led with mssql_sam
+    and a bare "exec" with mssql_exec. Different capabilities keep their alphabetical order (no
+    smb_local_groups over ldap_groups)."""
     def tie(se):
         return round(se[0], 6), se[1].kind == "module", _capability(se[1])
     lead: dict = {}
     for se in scored:
         lead[tie(se)] = min(lead.get(tie(se), se[1].name), se[1].name)
-    scored.sort(key=lambda se: (-tie(se)[0], tie(se)[1], lead[tie(se)],
+    scored.sort(key=lambda se: (-tie(se)[0], tie(se)[1], tie(se)[2] != "enum_hosts", lead[tie(se)],
                                 _PROTO_ORDER.get(se[1].protocol, len(_PROTO_ORDER)), se[1].name))
 
 

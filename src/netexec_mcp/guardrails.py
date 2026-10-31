@@ -211,6 +211,9 @@ READ_ONLY_SIBLINGS = {
 _NO_ANALOG_EXACT = frozenset({
     "smb_put_file", "mssql_put_file", "ldap_targeted_kerberoast",
     "smb_delegate", "smb_coerce_plus", "nxc_run_module", "nxc_raw_command",
+    # command execution: the generic line sent agents hunting for a read-only lookalike
+    # (wmi_exec -> wmi_enum_hosts after a refusal), which runs but does not answer
+    "smb_exec", "winrm_exec", "wmi_exec", "mssql_exec", "ssh_exec", "rdp_exec",
 })
 
 
