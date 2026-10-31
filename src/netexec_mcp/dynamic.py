@@ -36,6 +36,7 @@ from dataclasses import dataclass, field
 from fastmcp.exceptions import ToolError
 from fastmcp.server.middleware import Middleware
 
+from .config import DEFAULT_PROTOCOLS
 from .executor import _folded_args
 
 # Tools that stay visible in dynamic mode: the meta-tools + the health check.
@@ -217,7 +218,35 @@ _TOKEN_SYNONYMS = {
     # words only, so "trusted" itself keeps pointing at delegation.
     "trust": ("dc", "list"),
     "trusts": ("dc", "list"),
+    # "sql server" never reached the mssql tools: "sql" is a suffix of the name-part, not a prefix.
+    "sql": ("mssql",),
 }
+
+# Words that state a command-execution intent. Each adds a full-weight literal "exec": as an
+# intent verb "execute" is a stopword, and the 0.4 synonym weight lost to any concrete noun
+# ("execute command remote" led with the remote-uac module, "cmd" with enable_cmdshell). The
+# impacket method names are how operators say it. "shell"/"powershell" stay synonyms only:
+# "get a meterpreter shell" belongs to met_inject.
+_EXEC_WORDS = frozenset({
+    "execute", "exec", "execution", "command", "commands", "cmd", "cmdshell",
+    "psexec", "smbexec", "wmiexec", "atexec", "mmcexec", "dcomexec",
+})
+
+
+def _exec_intent(raw: list[str], protocol: str | None) -> list[str]:
+    """Raw query words with the command-execution intent made explicit.
+
+    A bare "whoami" is the command to run (the bench prompts say "Execute the command
+    'whoami'"), but it was an exact-name hit on the ldap `whoami` module, so it reads as "exec"
+    -- unless the query is about LDAP ("ldap whoami", "whoami module", protocol="ldap"). Other
+    command names stay literal: smb_tasklist is a tool, and "hostname" is mostly a noun."""
+    words = set(raw)
+    if "whoami" in words and not (words & {"ldap", "module"} or protocol == "ldap"):
+        raw = list(dict.fromkeys("exec" if w == "whoami" else w for w in raw))
+        words = set(raw)
+    if words & _EXEC_WORDS and "exec" not in words:
+        raw = [*raw, "exec"]
+    return raw
 
 
 def _expand(query_lower: str, tokens: list[str] | None = None) -> list[str]:
@@ -289,15 +318,18 @@ def _part_match(tok: str, parts: set[str]) -> bool:
     """token vs a name/summary word set, tolerant to plural/prefix. Handles both plurals
     (share ~ shares, database ~ databases) and short abbreviations against the real
     3-char tool-name stems (rid ~ rids, lsa ~ lsass). Min 3 chars so 1-2 char tokens
-    ("a", "id") stay exact-only and don't over-match. A stopword part never prefix-matches:
-    it carries no intent, yet "enumeration" hit every `enum` name-part and "force"/"forest"
-    the `for` of ldap_trusted_for_delegation."""
+    ("a", "id") stay exact-only and don't over-match. A stopword part never matches as the
+    prefix of a LONGER query word: it carries no intent, yet "enumeration" hit every `enum`
+    name-part and "force"/"forest" the `for` of ldap_trusted_for_delegation. The other way
+    round is kept: "exec" still matches the summary word "Execute" of smb_exec."""
     if tok in parts:
         return True
     if len(tok) >= 3:
         for p in parts:
-            if len(p) >= 3 and p not in _STOPWORDS and (tok.startswith(p) or p.startswith(tok)
-                                                       or _y_plural(tok, p) or _y_plural(p, tok)):
+            if len(p) < 3:
+                continue
+            if (p.startswith(tok) or (tok.startswith(p) and p not in _STOPWORDS)
+                    or _y_plural(tok, p) or _y_plural(p, tok)):
                 return True
     return False
 
@@ -358,17 +390,24 @@ def _score(entry: ToolEntry, tokens: list[str], expanded: list[str]) -> float:
     return sum(hit(t, 1.0) for t in tokens) + sum(hit(t, _SYN_W) for t in expanded)
 
 
+def _query_tokens(query: str, protocol: str | None = None) -> tuple[list[str], list[str], list[str]]:
+    """(raw words, literal tokens, synonym-expanded tokens) of a query, as the scorer sees
+    them. `protocol` is the lowercased hint: it decides whether "whoami" is the command."""
+    q_join = (query or "").lower().replace("-", "")   # for synonym detection (as-rep -> asrep)
+    raw = _exec_intent(_query_words(query), protocol)
+    tokens = [t for t in raw if t not in _STOPWORDS] or raw   # keep raw if all-stopword
+    tokens = [_stem_token(t) for t in tokens]                 # fold admin* -> admin, etc.
+    expanded = list(dict.fromkeys(e for e in _expand(q_join, raw) if e not in tokens))
+    return raw, tokens, expanded
+
+
 def search_scored(index, query: str, protocol: str | None = None,
                   limit: int = 8) -> list[tuple[float, ToolEntry]]:
     """Ranked ``(score, entry)`` pairs -- the scoring core of :func:`search`. Exposing the
     score lets callers gauge match strength (e.g. a weak/zero top score -> suggest the nxc
     module long-tail rather than let the model give up)."""
     proto = protocol.strip().lower() if protocol else None
-    q_join = (query or "").lower().replace("-", "")   # for synonym detection (as-rep -> asrep)
-    raw = _query_words(query)
-    tokens = [t for t in raw if t not in _STOPWORDS] or raw   # keep raw if all-stopword
-    tokens = [_stem_token(t) for t in tokens]                 # fold admin* -> admin, etc.
-    expanded = list(dict.fromkeys(e for e in _expand(q_join, raw) if e not in tokens))
+    raw, tokens, expanded = _query_tokens(query, proto)
     has_query = bool(raw)
     scored: list[tuple[float, ToolEntry]] = []
     for e in index:
@@ -384,8 +423,7 @@ def search_scored(index, query: str, protocol: str | None = None,
             scored.append((s, e))
     if has_query:
         scored = _demote_modules(scored, tokens)
-    # A tool wins an exact tie with a module: it returns parsed fields and takes typed params.
-    scored.sort(key=lambda se: (-se[0], se[1].kind == "module", se[1].name))
+    _sort_ranked(scored)
     out: list[tuple[float, ToolEntry]] = []
     seen_modules: set[str] = set()
     for s, e in scored:
@@ -399,6 +437,32 @@ def search_scored(index, query: str, protocol: str | None = None,
         if len(out) >= max(1, limit):
             break
     return out
+
+
+_PROTO_ORDER = {p: i for i, p in enumerate(DEFAULT_PROTOCOLS)}
+
+
+def _capability(e: ToolEntry) -> str:
+    """smb_sam and mssql_sam are one capability over two protocols: the name minus its protocol."""
+    if e.kind == "tool" and e.protocol in _PROTO_ORDER:
+        return e.name.split("_", 1)[1]
+    return e.name
+
+
+def _sort_ranked(scored: list[tuple[float, ToolEntry]]) -> None:
+    """Order by score; break exact ties in place.
+
+    A tool wins a tie with a module: it returns parsed fields and takes typed params. Within a
+    tie, one capability offered by several protocols comes in DEFAULT_PROTOCOLS order, smb first
+    -- on the alphabet "dump sam" led with mssql_sam and a bare "exec" with mssql_exec. Different
+    capabilities keep their alphabetical order (no smb_local_groups over ldap_groups)."""
+    def tie(se):
+        return round(se[0], 6), se[1].kind == "module", _capability(se[1])
+    lead: dict = {}
+    for se in scored:
+        lead[tie(se)] = min(lead.get(tie(se), se[1].name), se[1].name)
+    scored.sort(key=lambda se: (-tie(se)[0], tie(se)[1], lead[tie(se)],
+                                _PROTO_ORDER.get(se[1].protocol, len(_PROTO_ORDER)), se[1].name))
 
 
 # A module that matches fewer query words strongly than the best-matching tool has its score cut
@@ -453,21 +517,11 @@ _NOT_IMPLEMENTED = (
 )
 
 
-def _literal_tokens(query: str) -> list[str]:
-    """The literal query tokens as the scorer sees them (stopworded + stemmed)."""
-    raw = _query_words(query)
-    toks = [t for t in raw if t not in _STOPWORDS] or raw
-    return [_stem_token(t) for t in toks]
-
-
-def _confidence_tokens(query: str) -> tuple[list[str], list[str]]:
-    """(literal, synonym-expanded) tokens, mirroring search_scored. The confidence gauge must
-    count synonym hits too, or a match ranked #1 BY a synonym (e.g. whoami->exec -> winrm_exec)
-    is wrongly flagged low-confidence."""
-    q_join = (query or "").lower().replace("-", "")
-    raw = _query_words(query)
-    lit = [_stem_token(t) for t in ([t for t in raw if t not in _STOPWORDS] or raw)]
-    exp = list(dict.fromkeys(e for e in _expand(q_join, raw) if e not in lit))
+def _confidence_tokens(query: str, protocol: str | None = None) -> tuple[list[str], list[str]]:
+    """(literal, synonym-expanded) tokens, exactly as search_scored builds them. The confidence
+    gauge must count synonym hits too, or a match ranked #1 BY a synonym is wrongly flagged
+    low-confidence."""
+    _, lit, exp = _query_tokens(query, protocol.strip().lower() if protocol else None)
     return lit, exp
 
 
@@ -794,7 +848,7 @@ def register(mcp, get_config, index) -> None:
         # the failure mode that makes small models loop (validated: eliminates loop-deaths,
         # lifts small-model completion; see docs/dynamic-mode.md).
         top = matches[0]
-        lit, exp = _confidence_tokens(query)
+        lit, exp = _confidence_tokens(query, protocol)
         tokens = lit
         hits, strong = _token_hits(top, lit + exp)   # count synonym hits, not just literals
         # LOW CONFIDENCE: a real multi-term query whose top match caught only one term, or caught
