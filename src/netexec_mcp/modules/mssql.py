@@ -318,7 +318,7 @@ def register(mcp, get_config) -> None:
         pem_cert: str | None = None,
         pem_key: str | None = None,
     ) -> dict:
-        """Run a command on the target via MSSQL xp_cmdshell (`-x`, or `-X` for PowerShell).
+        """Execute a command on the target via MSSQL xp_cmdshell (`-x`, or `-X` for PowerShell).
 
         Executes through mssqlexec, which enables xp_cmdshell for the call and restores its
         previous state afterwards. Set `use_powershell`
