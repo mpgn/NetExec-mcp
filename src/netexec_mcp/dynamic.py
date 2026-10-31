@@ -30,7 +30,6 @@ front.
 from __future__ import annotations
 
 import difflib
-import json
 import re
 from dataclasses import dataclass, field
 
@@ -417,30 +416,6 @@ def _capability_note(tokens: list[str]) -> str | None:
     return None
 
 
-# Tools whose result can legitimately CHANGE between byte-identical calls (exec, writes,
-# retrieval, polling): never short-circuit a repeat of these. Dedup is only safe for read-only
-# enumeration that returns a large, stable payload.
-_NON_IDEMPOTENT = ("exec", "put_", "get_file", "get_folder", "spider", "run_module",
-                   "raw_command", "delegate", "coerce", "spray", "add_computer",
-                   "targeted_kerberoast", "wmi_", "ntds", "sam", "lsa", "dpapi")
-
-
-def _dedup_safe(name: str, sc) -> bool:
-    """A call is safe to memoise (short-circuit a byte-identical repeat) ONLY when it is a
-    read-only enumeration that SUCCEEDED with a substantive payload. Never for exec/write/
-    stateful tools, and never for benign-empty / auth-failed / guest-only / op-error results
-    (which can change on retry: a down host recovers, an account unlocks). Note: ExecOutcome
-    has no top-level 'error' key, so a mere `"error" not in sc` is NOT a success signal."""
-    if not isinstance(sc, dict) or any(tok in name for tok in _NON_IDEMPOTENT):
-        return False
-    if sc.get("outcome_class") != "success":
-        return False
-    big_stdout = len(sc.get("stdout") or "") > 1024
-    big_struct = any(isinstance(v, list) and v and k not in ("records", "command")
-                     for k, v in sc.items())
-    return big_stdout or big_struct
-
-
 def _is_list_param(schema) -> bool:
     """True if a JSON-schema property accepts an array (so a bare scalar can be coerced to [x])."""
     if not isinstance(schema, dict):
@@ -649,10 +624,6 @@ def register(mcp, get_config, index) -> None:
     # re-phrase the same intent (`dump ntds` -> `ntds dump`) instead of committing to a
     # call; on a repeat we nudge them to run the top match. Per-process = per-session.
     searched: set[str] = set()
-    # Dedup state: keys of exact (tool, args) calls that already SUCCEEDED this session. A
-    # byte-identical repeat returns a short stub instead of re-dispatching and re-dumping the
-    # full (often 20-50KB) payload -- the context-budget drain behind several run deaths.
-    call_memo: set[str] = set()
     # Loop-break state: the last (tool, missing-args) failure and its consecutive count. A model
     # that drops `arguments` re-sends the byte-identical call; on the 2nd+ identical miss we
     # return a drastically shorter imperative payload instead of the same long error.
@@ -889,22 +860,8 @@ def register(mcp, get_config, index) -> None:
                     "`arguments`.")}
             return d
 
-        try:
-            memo_key = name + "|" + json.dumps(arguments or {}, sort_keys=True, default=str)
-        except Exception:  # noqa: BLE001 -- unhashable/odd args just skip the memo
-            memo_key = None
-        if memo_key and memo_key in call_memo:
-            # Byte-identical repeat of a read-only enumeration that already SUCCEEDED with a large
-            # payload -> don't re-dispatch or re-dump it. Only read-only enum calls are memoised
-            # (see _dedup_safe), so this never hides a state change from an exec/write/retry.
-            return _out({
-                "name": name,
-                "deduplicated": True,
-                "note": (f"you already ran this exact read-only nxc_call(name={name!r}) "
-                         "successfully; the large result is unchanged and was not re-sent. "
-                         "Re-run only if the target state changed, else move on."),
-            })
-
+        # A repeat of an identical call is always re-dispatched: the server cannot tell a loop
+        # from a re-check after a state change or a client that lost the first result.
         try:
             result = await mcp.call_tool(name, arguments or {})
         except ToolError as exc:
@@ -917,10 +874,7 @@ def register(mcp, get_config, index) -> None:
             return _out(_reformat_validation(str(exc), entry)
                         or {"error": f"{type(exc).__name__}: {exc}", "tool": name})
         if result.structured_content is not None:
-            sc = result.structured_content
-            if memo_key and _dedup_safe(name, sc):
-                call_memo.add(memo_key)   # only memoise a substantive read-only success
-            return _out(sc)
+            return _out(result.structured_content)
         text = "\n".join(getattr(c, "text", "") for c in (result.content or []))
         return _out({"result": text})
 
