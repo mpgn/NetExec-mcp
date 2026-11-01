@@ -18,7 +18,7 @@ from __future__ import annotations
 import os
 
 from ..auth import build_auth_flags
-from ..config import download_target
+from ..config import download_target, output_dir, written_file
 from ..executor import execute
 from ..results import (
     parse_dir,
@@ -1125,13 +1125,17 @@ def register(mcp, get_config) -> None:
         """Write hosts that don't require SMB signing to a file (`--gen-relay-list <file>`).
 
         Read-only recon: identifies NTLM-relay targets. `output_file` is written on
-        the nxc host.
+        the nxc host; a relative path lands under `<nxc_home>/output`, and the result gives
+        the absolute path in `output_file`.
         """
-        return await _recon_run(
+        output_file = written_file(output_file, output_dir(), create=not get_config().dry_run)
+        result = await _recon_run(
             get_config, ["--gen-relay-list", output_file], targets, username=username,
             password=password, ntlm_hash=ntlm_hash, domain=domain, local_auth=local_auth,
             kerberos=kerberos, use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key,
         )
+        result["output_file"] = output_file
+        return result
 
     @mcp.tool()
     async def smb_generate_hosts_file(
@@ -1161,8 +1165,10 @@ def register(mcp, get_config) -> None:
         Kerberos/FQDN-based tools need name resolution. The result includes the parsed
         `hosts_entries` and `instructions` to apply them. In `suggest` mode it returns the
         command for you to run yourself; in `recon`/`full` it writes `output_file` on the
-        nxc host. Applying it (review first!) typically: `sudo sh -c 'cat <file> >> /etc/hosts'`.
+        nxc host (a relative path under `<nxc_home>/output`; `hosts_file` gives the absolute
+        path). Applying it (review first!) typically: `sudo sh -c 'cat <file> >> /etc/hosts'`.
         """
+        output_file = written_file(output_file, output_dir(), create=not get_config().dry_run)
         result = await _recon_run(
             get_config, ["--generate-hosts-file", output_file], targets, username=username,
             password=password, ntlm_hash=ntlm_hash, domain=domain, local_auth=local_auth,
@@ -1217,8 +1223,10 @@ def register(mcp, get_config) -> None:
         testing host lacks a krb5 config, this writes one (realm, KDC, domain_realm) so
         `-k`/`--aesKey` auth works. The result includes the generated `krb5_conf` and
         `instructions`. Apply with: `export KRB5_CONFIG=<file>` (or copy to /etc/krb5.conf).
-        In `suggest` mode it returns the command for you to run yourself.
+        In `suggest` mode it returns the command for you to run yourself. A relative
+        `output_file` lands under `<nxc_home>/output`; `krb5_file` gives the absolute path.
         """
+        output_file = written_file(output_file, output_dir(), create=not get_config().dry_run)
         result = await _recon_run(
             get_config, ["--generate-krb5-file", output_file], targets, username=username,
             password=password, ntlm_hash=ntlm_hash, domain=domain, local_auth=local_auth,
@@ -1270,8 +1278,10 @@ def register(mcp, get_config) -> None:
         writes a ccache to `output_file`. Then reuse it WITHOUT re-authenticating: pass
         `ccache="<output_file>"` to any tool here (it sets KRB5CCNAME for that call and
         adds `--use-kcache`), or `export KRB5CCNAME=<output_file>` in your own shell.
-        Read-only (it requests your own ticket).
+        A relative `output_file` lands under `<nxc_home>/output`; reuse the absolute path
+        given in `ccache_file`. Read-only (it requests your own ticket).
         """
+        output_file = written_file(output_file, output_dir(), create=not get_config().dry_run)
         result = await _recon_run(
             get_config, ["--generate-tgt", output_file], targets, username=username,
             password=password, ntlm_hash=ntlm_hash, domain=domain, local_auth=local_auth,
@@ -1429,7 +1439,8 @@ def register(mcp, get_config) -> None:
         Does S4U2Self + S4U2Proxy to obtain a service ticket as `impersonate_user`.
         `self_only=true` does only S4U2Self (`--self`); `u2u=true` uses User-to-User
         (`--u2u`); `spn` overrides the S4U2Proxy SPN (`--spn`); `store_ticket`
-        saves the ticket to a file (`--generate-st`).
+        saves the ticket to a file (`--generate-st`; a relative path lands under
+        `<nxc_home>/output`, and `ticket_file` gives the absolute path).
 
         OFFENSIVE-GATED (NXC_MODE=full): credential/ticket abuse technique.
         """
@@ -1441,12 +1452,18 @@ def register(mcp, get_config) -> None:
         if spn:
             flags += ["--spn", spn]
         if store_ticket:
+            cfg = get_config()
+            store_ticket = written_file(store_ticket, output_dir(),
+                                        create=not cfg.dry_run and cfg.allow_offensive)
             flags += ["--generate-st", store_ticket]
-        return await _offensive_run(
+        result = await _offensive_run(
             get_config, flags, targets, username=username, password=password,
             ntlm_hash=ntlm_hash, domain=domain, local_auth=local_auth,
             kerberos=kerberos, use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key,
         )
+        if store_ticket:
+            result["ticket_file"] = store_ticket
+        return result
 
     # ---- Promoted `-M` modules (first-class tools for high-value modules) ---- #
     # Detection/enum modules run in recon mode; credential-gathering ones are offensive.

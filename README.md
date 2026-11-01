@@ -55,11 +55,17 @@ step-budget note beneath it.
 uv sync
 
 # Point at your nxc install (example: a uv-managed source checkout)
-export NXC_COMMAND="uv run --directory ~/NetExec netexec"
+export NXC_COMMAND="uv run --no-sync --directory ~/NetExec netexec"
 export NXC_SCOPE="10.0.0.0/24"          # required to target anything (fail-closed)
 
 uv run netexec-mcp
 ```
+
+`--no-sync` matters for a source checkout. Without it, every nxc call re-syncs the environment
+under a lock, so concurrent calls run one after another (4 simultaneous calls: about 7 s instead of
+1 s). The price: run `uv sync` in the NetExec checkout after each update, since nothing re-syncs
+it for you any more. Keep the `uv run --directory` form rather than the venv's `netexec` binary:
+`--directory` also runs nxc from the checkout, so its relative output paths stay in one place.
 
 MCP client config (`command`/`args` launch the server itself):
 
@@ -118,6 +124,7 @@ Four escalating levels of how much the server is allowed to *do*:
 | `NXC_COMMAND` | Base command (shlex-parsed). Falls back to `nxc`/`netexec` on `PATH`. | autodetect |
 | `NXC_PROTOCOLS` | Comma-separated protocols to enable (e.g. `smb,ldap`). | all implemented |
 | `NXC_TOOL_MODE` | Tool-surface presentation — `dynamic` (**default**: expose only meta-tools; the ~100-tool surface is discovered via `nxc_find_tool`/`nxc_catalog` and run via `nxc_call`) or `static` (list every tool). Dynamic keeps the ~46k-token surface out of the context window — required for small-context models, ~8× cheaper (same quality) on large ones. Set `static` to opt out (best for a decisive model, or to avoid discovery round-trips on a big-context model). | `dynamic` |
+| `NXC_MODULE_CATALOG` | Where dynamic mode's `-M` module catalog comes from — `static` (**default**: the list shipped in `netexec_mcp/data/nxc_modules.json`, no nxc process at startup, same index on every start) or `live` (ask the installed nxc, one `nxc <proto> -L` per protocol at startup: needed for custom modules in `NXC_PATH/modules` or an nxc newer than the list). Discovery only: `nxc_run_module`'s mode gate always reads the module category from the installed nxc. Regenerate the list after an nxc update with `scripts/gen_module_catalog.py`; the server warns at startup when the installed nxc version differs. | `static` |
 | `NXC_SCOPE` | Comma-separated target allowlist (IP/CIDR/range/hostname). **Fail-closed**: targets with no scope are rejected. | _(none)_ |
 | `NXC_MODE` | Operating level — `suggest` / `recon` / `loot` / `full`. | `recon` |
 | `NXC_TIMEOUT` | Per-call timeout (seconds). | `300` |
