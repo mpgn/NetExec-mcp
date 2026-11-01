@@ -47,6 +47,14 @@ VALID_MODES = ("suggest", "recon", "loot", "full")
 #              startup warning is emitted.
 VALID_TOOL_MODES = ("static", "dynamic")
 
+# NXC_MODULE_CATALOG -- where the dynamic mode's `-M` module catalog comes from:
+#   static -- the list shipped in netexec_mcp/data/nxc_modules.json (default), generated from a
+#             given nxc by scripts/gen_module_catalog.py: no nxc process at startup, and the same
+#             index on every start.
+#   live   -- ask the installed nxc at every startup (`nxc <proto> -L` per protocol): sees custom
+#             modules in NXC_PATH/modules and an nxc newer than the shipped list.
+VALID_MODULE_CATALOGS = ("static", "live")
+
 
 class ConfigError(RuntimeError):
     """Raised when the server cannot determine a valid configuration."""
@@ -78,6 +86,33 @@ def loot_dir() -> Path:
     """Per-run loot dir under the nxc home (NXC_PATH-isolated). Default output location for the
     roasting tools' hash files."""
     return nxc_home() / "loot"
+
+
+def output_dir() -> Path:
+    """Per-run dir under the nxc home (NXC_PATH-isolated) for the files nxc writes on a tool's
+    behalf: relay list, hosts file, krb5.conf, ticket ccache."""
+    return nxc_home() / "output"
+
+
+def written_file(path: str, base: Path, *, create: bool) -> str:
+    """ABSOLUTE path for a file nxc writes on a tool's behalf. An absolute ``path`` is used
+    verbatim; a relative one resolves under ``base``, clamped inside it (a ``../`` escape keeps only
+    its basename, as in :func:`download_target`). nxc would otherwise resolve it against ITS OWN
+    cwd, which depends on how nxc is launched: the NetExec checkout under ``uv run --directory``,
+    the MCP client's cwd with a plain binary (pipx, ``uv tool``, a venv). The file then landed where
+    the agent was never told, and the tools that read it back (hosts file, krb5.conf) looked in the
+    MCP's own cwd and silently returned nothing. ``create`` makes the parent dir, for a call that
+    will actually run."""
+    p = os.path.expanduser(path)
+    if not os.path.isabs(p):
+        b = os.path.normpath(str(base))
+        p = os.path.normpath(os.path.join(b, p))
+        if p == b or not p.startswith(b + os.sep):
+            bn = os.path.basename(path.rstrip("/\\"))
+            p = os.path.join(b, bn if bn not in ("", ".", "..") else "output")
+    if create:
+        os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
+    return p
 
 
 def resolve_downloads_dir(cfg) -> Path:
@@ -177,7 +212,7 @@ def resolve_base_command() -> list[str]:
 
     raise ConfigError(
         "Could not find NetExec. Set NXC_COMMAND (e.g. "
-        "\"uv run --directory ~/NetExec netexec\") or put 'nxc'/'netexec' on PATH."
+        "\"uv run --no-sync --directory ~/NetExec netexec\") or put 'nxc'/'netexec' on PATH."
     )
 
 
@@ -220,6 +255,16 @@ def _resolve_tool_mode() -> str:
     return raw
 
 
+def _resolve_module_catalog() -> str:
+    """Resolve NXC_MODULE_CATALOG (static|live); defaults to static (see VALID_MODULE_CATALOGS)."""
+    raw = (os.environ.get("NXC_MODULE_CATALOG") or "static").strip().lower()
+    if raw not in VALID_MODULE_CATALOGS:
+        raise ConfigError(
+            f"NXC_MODULE_CATALOG must be one of {', '.join(VALID_MODULE_CATALOGS)}; got {raw!r}."
+        )
+    return raw
+
+
 @dataclass(frozen=True)
 class Config:
     base_command: list[str]
@@ -250,6 +295,8 @@ class Config:
     # NXC_LOG_DIR: when set, every executed call gets its own nxc `--log` file here (the full
     # raw output, kept even when the model-facing stdout is capped). None -> no per-call log.
     log_dir: str | None = None
+    # NXC_MODULE_CATALOG: "static" (the shipped list, default) or "live" (`nxc -L` at startup).
+    module_catalog: str = "static"
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -275,4 +322,5 @@ class Config:
             pwn3d_label=conf["pwn3d_label"],
             downloads_dir=os.environ.get("NXC_DOWNLOADS_DIR") or None,
             log_dir=os.environ.get("NXC_LOG_DIR") or None,
+            module_catalog=_resolve_module_catalog(),
         )

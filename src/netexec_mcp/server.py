@@ -277,10 +277,16 @@ def main() -> None:
         # Snapshot the full tool surface BEFORE installing the hiding middleware -- the
         # middleware filters the server's own list_tools too (see dynamic.py).
         full_tools = asyncio.run(mcp.list_tools())
-        # Collect the nxc -M module catalog (one -L per enabled protocol) so the long-tail
-        # modules (raisechild, ticketer, nopac, ...) are searchable via nxc_find_tool and
-        # route to nxc_run_module -- otherwise they are invisible to discovery.
-        modules = asyncio.run(meta.collect_module_catalog(get_config, config.protocols))
+        # The nxc -M module catalog, so the long-tail modules (raisechild, ticketer, nopac, ...)
+        # are searchable via nxc_find_tool and route to nxc_run_module -- otherwise they are
+        # invisible to discovery. Default: the list shipped with the MCP (no nxc process at
+        # startup); NXC_MODULE_CATALOG=live asks the installed nxc, one -L per enabled protocol.
+        modules, catalog = None, "live: one `nxc -L` per protocol"
+        if config.module_catalog == "static":
+            modules, catalog = meta.static_module_catalog(config.protocols, health.get("detail"))
+        if modules is None:
+            modules = asyncio.run(meta.collect_module_catalog(get_config, config.protocols))
+        print(f"[netexec-mcp] module catalog: {catalog}", file=sys.stderr)
         index = dynamic.build_index(full_tools, modules)
         dynamic.register(mcp, get_config, index)
         mcp.add_middleware(dynamic.DynamicModeMiddleware())

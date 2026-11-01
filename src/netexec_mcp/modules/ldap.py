@@ -28,7 +28,7 @@ import os
 import re
 
 from ..auth import build_auth_flags
-from ..config import loot_dir
+from ..config import loot_dir, written_file
 from ..executor import execute
 from ..results import (
     decode_attributes,
@@ -55,10 +55,11 @@ _ATTR_SPLIT_RE = re.compile(r"[,;\s]+")
 
 def _roast_output(get_config, output_file, kind: str) -> str:
     """Resolve a roast hash-file path. Default: ``<loot_dir>/<kind>.txt`` (NXC_PATH-isolated per
-    run); an explicit path is used as-is. Creates the parent dir when actually executing so the
-    first call succeeds. Returns the resolved absolute path."""
+    run); an explicit absolute path is used as-is, a relative one resolves under the loot dir
+    (:func:`config.written_file`). Creates the parent dir when actually executing so the first
+    call succeeds. Returns the resolved absolute path."""
     cfg = get_config()
-    path = (os.path.expanduser(output_file) if output_file
+    path = (written_file(output_file, loot_dir(), create=False) if output_file
             else os.path.join(str(loot_dir()), f"{kind}.txt"))
     # Create the loot dir only for a call that will actually run (roasting is loot-gated), so a
     # recon-mode refusal leaves no stray dir.

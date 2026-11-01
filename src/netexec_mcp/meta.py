@@ -17,7 +17,9 @@ that don't have a dedicated tool:
 from __future__ import annotations
 
 import asyncio
+import json
 import re
+from pathlib import Path
 
 from .auth import build_auth_flags
 from .executor import execute
@@ -214,6 +216,37 @@ async def collect_module_catalog(get_config, protocols) -> list[dict]:
             seen.add((proto, name))
             out.append({**m, "protocol": proto})
     return out
+
+
+STATIC_CATALOG = Path(__file__).parent / "data" / "nxc_modules.json"
+
+
+def static_module_catalog(protocols, installed_version: str | None = None) -> tuple[list[dict] | None, str]:
+    """The `-M` module catalog shipped with the MCP (NXC_MODULE_CATALOG=static, the default).
+
+    Written by scripts/gen_module_catalog.py with the very collector above, from a given nxc, so
+    the dynamic index is built without starting a single nxc process (the live build took ~20 s
+    under `uv run`, 2026-11-01) and is the same on every start. It only feeds DISCOVERY
+    (nxc_find_tool, nxc_describe_tool): nxc_run_module's recon/loot/full gate still reads the
+    module's category from the installed nxc (`_module_categories`), so a stale or edited file
+    cannot change what a mode allows. Modules the file does not list (custom ones in
+    NXC_PATH/modules, an nxc newer than the file) stay invisible to discovery: that is what
+    NXC_MODULE_CATALOG=live is for. Records come back in `protocols` order, as live discovery
+    yields them. Returns (None, reason) when the file is missing or unreadable, so the caller can
+    fall back to live discovery."""
+    try:
+        data = json.loads(STATIC_CATALOG.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return None, f"static catalog unreadable ({type(exc).__name__}), fell back to live discovery"
+    order = {p: i for i, p in enumerate(protocols)}
+    mods = sorted((dict(m) for m in data.get("modules", []) if m.get("protocol") in order),
+                  key=lambda m: order[m["protocol"]])
+    built_for = data.get("nxc_version") or "?"
+    note = f"static, generated for nxc {built_for}"
+    if installed_version and built_for != "?" and installed_version.strip() != built_for.strip():
+        note += (f" -- the installed nxc reports {installed_version.strip()!r}: regenerate it "
+                 "(scripts/gen_module_catalog.py) or set NXC_MODULE_CATALOG=live")
+    return mods, note
 
 
 def register(mcp, get_config) -> None:
