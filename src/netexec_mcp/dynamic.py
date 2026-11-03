@@ -33,7 +33,10 @@ import difflib
 import re
 from dataclasses import dataclass, field
 
+from typing import Annotated
+
 from fastmcp.exceptions import ToolError
+from pydantic import Field
 from fastmcp.server.middleware import Middleware
 
 from .config import DEFAULT_PROTOCOLS
@@ -48,7 +51,7 @@ DYNAMIC_VISIBLE = frozenset(
 # Weak models reliably drop the trailing `arguments` object after emitting the scalar `name`;
 # accepting these flat keeps the essential data flowing (nxc_call folds them into `arguments`,
 # the middleware leaves them for nxc_call instead of flagging them as strays).
-NXC_CALL_FIRST_CLASS = ("targets", "username", "password", "domain")
+NXC_CALL_FIRST_CLASS = ("targets", "username", "password", "domain", "ntlm_hash", "local_auth")
 
 # Name prefixes that map to a protocol / group (for deriving `protocol`). nxc_* and
 # workspace_* are meta/offline, not a wire protocol, but are still useful groupings.
@@ -67,8 +70,9 @@ DYNAMIC_INSTRUCTIONS = (
     "nxc_describe_tool(name=\"<tool>\").\n"
     "Example: nxc_find_tool(\"smb shares\") -> nxc_call(\"smb_shares\", "
     "{\"targets\": [\"10.0.0.1\"], \"username\": \"u\", \"password\": \"p\"}).\n"
-    "The common params targets/username/password/domain may be passed at the top level of "
-    "nxc_call OR inside `arguments`; every OTHER tool parameter goes inside `arguments`. So "
+    "The common params targets/username/password/ntlm_hash/domain/local_auth may be passed at "
+    "the top level of nxc_call OR inside `arguments` (local_auth=true for a local account, "
+    "ntlm_hash for pass-the-hash); every OTHER tool parameter goes inside `arguments`. So "
     "nxc_call(name=\"smb_get_file\", share=\"all\") is WRONG (share is not a common param); write "
     "nxc_call(name=\"smb_get_file\", arguments={\"share\": \"all\", \"targets\": [...]}). Only "
     "nxc_call takes `arguments` -- call a zero-arg tool (e.g. nxc_health) with no arguments.\n"
@@ -718,6 +722,21 @@ def _norm_query(query: str) -> str:
     return " ".join(sorted(_WORD_RE.findall((query or "").lower())))
 
 
+def _auth_hint(entry: ToolEntry) -> str:
+    """The creds clause of find_tool's hint, from the top tool's OWN params, so it never claims a
+    param the tool lacks (ldap/ssh/... take no local_auth; smb_spray/nfs/vnc take no username).
+    Replaces the 16-name optional_legend: the two auth params small models drop (local_auth,
+    ntlm_hash) are named where the call is decided, and nothing points at nxc_describe_tool."""
+    props = (entry.parameters or {}).get("properties", {})
+    if "username" not in props:
+        return ""
+    secret = "password or ntlm_hash" if "ntlm_hash" in props else "password"
+    clause = f" and creds: username + {secret}, domain"
+    if "local_auth" in props:
+        clause += "; local account: local_auth=true, no domain"
+    return clause
+
+
 def _suggested_call(entry: ToolEntry) -> dict:
     """A ready-to-run call skeleton for the top match: the tool name + its required params
     as typed placeholders. Handing the model a concrete next call (rather than a list to
@@ -836,10 +855,6 @@ def register(mcp, get_config, index) -> None:
         matches = [e for _, e in scored]
         views = [_match_view(e, common_optional) for e in matches]
         out = {"query": query, "count": len(matches), "matches": views}
-        if matches and common_optional:
-            out["optional_legend"] = sorted(common_optional)
-            out["legend_note"] = ("every match also accepts these optional auth params "
-                                  "(listed once here, omitted per-match; nxc_describe_tool for types).")
         note = None
         if protocol and protocol.strip().lower() not in by_protocol:
             note = (f"{protocol.strip().lower()!r} is not a valid protocol (valid: "
@@ -875,7 +890,7 @@ def register(mcp, get_config, index) -> None:
             out["module_hint"] = _MODULE_HINT
         else:
             out["hint"] = (f"To run the top match: nxc_call(name={top.name!r}, arguments={{...}}) "
-                           f"-- fill in targets and any auth. Don't search again for the same thing.")
+                           f"-- fill in targets{_auth_hint(top)}. Don't search again for the same thing.")
         # Absolute-weak score or a module meta-tool on top also routes to the module path.
         if (scored[0][0] < _WEAK_MATCH_SCORE or top.name in _MODULE_META) and "module_hint" not in out:
             out["module_hint"] = _MODULE_HINT
@@ -914,32 +929,66 @@ def register(mcp, get_config, index) -> None:
                 }
             return {"error": f"unknown tool {name!r}",
                     **_capability_suggest(name, index, by_protocol)}
+        props = (e.parameters or {}).get("properties", {})
+
+        def _t(p):
+            sch = props.get(p, {})
+            d = sch.get("default") if isinstance(sch, dict) else None
+            return _typestr(sch) + (f"={d}" if d not in (None, False, "") else "")
         return {
             "name": e.name,
             "protocol": e.protocol,
             "description": e.description,
-            "input_schema": e.parameters,
+            "required": {p: _t(p) for p in e.required},
+            "optional": {p: _t(p) for p in props if p not in set(e.required)},
         }
 
     @mcp.tool()
-    async def nxc_call(name: str, arguments: dict | None = None,
-                       targets: list | str | None = None, username: str | None = None,
-                       password: str | None = None, domain: str | None = None) -> dict:
+    async def nxc_call(
+        name: str,
+        arguments: Annotated[dict | None, Field(description=(
+            "The tool's own params (see its signature). Kerberos/certificate auth also goes here: "
+            "kerberos, use_kcache, ccache, aes_key, kdc_host, pfx_cert, pfx_base64, pfx_pass, "
+            "pem_cert, pem_key, cred_id."))] = None,
+        targets: list | str | None = None, username: str | None = None,
+        password: str | None = None, domain: str | None = None,
+        ntlm_hash: Annotated[str | None, Field(description=(
+            "NT hash for pass-the-hash, instead of password."))] = None,
+        local_auth: Annotated[bool | None, Field(description=(
+            "true = log in as a LOCAL account of the target (e.g. its local Administrator), "
+            "not a domain account; leave domain unset."))] = None,
+    ) -> dict:
         """Run a tool by name with the given arguments (dynamic-mode dispatch).
 
         `name` is a tool from nxc_find_tool/nxc_catalog; `arguments` is a dict keyed by
         that tool's parameter names (see nxc_describe_tool). The common params
-        `targets`/`username`/`password`/`domain` may ALSO be passed at the top level (they are
-        folded into `arguments`, an explicit `arguments` entry wins) -- so a call still runs
-        even if the trailing `arguments` object is dropped. Every OTHER tool parameter goes
-        inside `arguments`. Returns the tool's result; the recon/loot/full gate still applies.
+        `targets`/`username`/`password`/`ntlm_hash`/`domain`/`local_auth` may ALSO be passed at
+        the top level (folded into `arguments` when the tool takes them; an explicit `arguments`
+        entry wins). Every OTHER tool parameter goes inside `arguments`. Returns the tool's result; the recon/loot/full gate still applies.
         """
         # Fold first-class top-level params into `arguments` (explicit arguments entry wins).
+        # Only params the target tool ACCEPTS are folded: a top-level local_auth on an ldap tool,
+        # or username on smb_spray, would otherwise turn into an "unexpected keyword" error round
+        # trip. A truthy one the tool cannot take is reported in `auth_note`; None/"" are ignored
+        # (clients mangle empty strings; auth.py adds -p '' itself for a username-only bind).
         arguments = dict(arguments) if isinstance(arguments, dict) else {}
+        _accepts = (set(((by_name[name].parameters or {}).get("properties") or {}))
+                    if name in by_name else None)
+        _auth_notes = []
         for _k, _v in (("targets", targets), ("username", username),
-                       ("password", password), ("domain", domain)):
-            if _v is not None and _k not in arguments:
-                arguments[_k] = _v
+                       ("password", password), ("domain", domain),
+                       ("ntlm_hash", ntlm_hash), ("local_auth", local_auth)):
+            if _v is None or _v == "" or _k in arguments:
+                continue
+            if _accepts is not None and _k not in _accepts:
+                if _v:
+                    _auth_notes.append(f"{_k} ignored: {name} does not take it")
+                continue
+            arguments[_k] = _v
+        # local_auth + domain is refused by auth.py; a local login has no domain, so drop it.
+        if arguments.get("local_auth") is True and arguments.get("domain"):
+            _auth_notes.append(f"domain {arguments.pop('domain')!r} ignored: local_auth=true logs in "
+                               "as a local account")
         if name not in by_name:
             # The recurring small-model failure is GUESSING a tool name (smb_login,
             # smb_ms17_010, winrm_whoami), hitting this, and giving up. Catch it at the
@@ -984,7 +1033,8 @@ def register(mcp, get_config, index) -> None:
                 "signature": _signature(entry),
                 "suggested_call": _suggested_call(entry),
                 "hint": ('Fill EVERY required param. The common ones (targets/username/password/'
-                         'domain) may be passed at the top level of nxc_call OR inside `arguments`; '
+                         'ntlm_hash/domain/local_auth) may be passed at the top level of nxc_call OR '
+                         'inside `arguments`; '
                          'every other param goes inside `arguments`. `targets` takes the whole scope '
                          'in one call (IP, CIDR 10.0.0.0/24, range, or hostname). Nothing is '
                          'remembered between calls, so pass creds again each time.'),
@@ -1001,6 +1051,8 @@ def register(mcp, get_config, index) -> None:
         def _out(d):
             # The model view (stdout cap, key order) is applied by server.ModelViewMiddleware,
             # on the inner tool call and again on this nxc_call result -- not here.
+            if _auth_notes and isinstance(d, dict):
+                d = {**d, "auth_note": "; ".join(_auth_notes)}
             # If the middleware un-flattened this call, hint the model to nest next time.
             if folded and isinstance(d, dict) and "_note" not in d:
                 return {**d, "_note": (
