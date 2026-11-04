@@ -123,7 +123,9 @@ def read_hosts(path: Path) -> list[dict]:
         cols = _cols(con, "hosts")
         if not cols:
             return []
-        sel = [c for c in cols if c != "id"]
+        # the table's own column order: iterating the set gave a per-process hash order, so the
+        # same DB came back with its fields shuffled from one server start to the next
+        sel = [r[1] for r in con.execute("PRAGMA table_info(hosts)") if r[1] != "id"]
         rows = [dict(r) for r in con.execute(
             f"SELECT {', '.join(sel)} FROM hosts ORDER BY id").fetchall()]
         for r in rows:
@@ -153,7 +155,8 @@ def read_creds(path: Path, proto: str, reveal: bool,
         cols = _cols(con, table)
         if not cols:
             return []
-        sel = [c for c in cols if c not in {"id", "pillaged_from_hostid"}]
+        sel = [r[1] for r in con.execute(f"PRAGMA table_info({table})")   # table order, as hosts
+               if r[1] not in {"id", "pillaged_from_hostid"}]
         rows = [dict(r) for r in con.execute(
             f"SELECT {', '.join(sel)} FROM {table} ORDER BY username").fetchall()]
         if want_user:
