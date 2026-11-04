@@ -76,6 +76,17 @@ def reset_current_tool(token) -> None:
     _current_tool.reset(token)
 
 
+# Tools the mode gate refused in this process: (tool, mode) -> the mode that would run it. The
+# mode is fixed for the life of the server, so a refusal stays true. nxc_run_module reads it so
+# it does not point an agent back at a tool the gate already refused (meta._wrong_protocol_error).
+_gate_refusals: dict[tuple[str, str], str] = {}
+
+
+def gate_refusal(tool: str, mode: str) -> str | None:
+    """The mode `tool` needs if the gate already refused it in `mode`, else None."""
+    return _gate_refusals.get((tool, mode))
+
+
 # Set by the dynamic-mode middleware when it folds a *flattened* nxc_call (tool params passed
 # at the top level instead of under `arguments`) back into place. Recorded in the audit so the
 # benchmark can count how often a model flattens. None when no fold happened.
@@ -459,6 +470,8 @@ async def execute(
         # NXC_MODE -- the same "show the command" courtesy suggest mode already gives.
         # Nothing executes here.
         required = "loot" if dump else "full"
+        if _current_tool.get():
+            _gate_refusals[(_current_tool.get(), config.mode)] = required
         # The loot-tier (dump) refusal from check_offensive is already precise; the full-tier
         # one is generic, so replace its lead with a tool-aware detail (name a read-only sibling,
         # or say plainly there is none -- so the agent stops hunting for an alternative).
