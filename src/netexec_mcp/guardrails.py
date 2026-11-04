@@ -40,6 +40,10 @@ class TooManyTargets(GuardrailError):
     """More target tokens than NXC_MAX_TARGETS were supplied."""
 
 
+class ProtocolNotEnabled(GuardrailError):
+    """The protocol is not in the NXC_PROTOCOLS allowlist."""
+
+
 # --------------------------------------------------------------------------- #
 # Scope
 # --------------------------------------------------------------------------- #
@@ -235,6 +239,18 @@ def offensive_block_detail(tool: str | None) -> str:
     return ("this action is offensive (exec/write/spray/exploit) and is blocked. If you only need "
             "read-only enumeration, a dedicated non-gated tool may exist -- find it with "
             "nxc_find_tool; do not guess.")
+
+
+def check_protocol(protocol: str, enabled: list[str]) -> None:
+    """NXC_PROTOCOLS, enforced where every command passes. Until 2026-11-04 only tool
+    registration honoured it: the escape hatches that take a free protocol (nxc_run_module,
+    nxc_raw_command, nxc_list_modules, nxc_search_tools) could run one the operator had not
+    enabled."""
+    if protocol not in enabled:
+        raise ProtocolNotEnabled(
+            f"protocol {protocol!r} is not enabled (NXC_PROTOCOLS={','.join(enabled)}); nothing "
+            "ran. Use an enabled protocol, or ask the operator to add it to NXC_PROTOCOLS."
+        )
 
 
 def check_target_cap(targets: list[str], max_targets: int) -> None:

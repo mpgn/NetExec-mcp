@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+from functools import lru_cache
 from pathlib import Path
 
 from .auth import build_auth_flags
@@ -249,6 +250,58 @@ def static_module_catalog(protocols, installed_version: str | None = None) -> tu
     return mods, note
 
 
+@lru_cache(maxsize=1)
+def _catalog_index() -> dict[str, frozenset]:
+    """{module: the protocols the shipped catalog lists it under}; {} if the file is unreadable."""
+    try:
+        data = json.loads(STATIC_CATALOG.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    index: dict[str, set] = {}
+    for m in data.get("modules", []):
+        if m.get("name") and m.get("protocol"):
+            index.setdefault(m["name"], set()).add(m["protocol"])
+    return {name: frozenset(protos) for name, protos in index.items()}
+
+
+async def _find_module_protocols(get_config, module: str, requested: str) -> set[str]:
+    """Every protocol nxc lists `module` under, for nxc_run_module's wrong-protocol error: the
+    shipped catalog first (no nxc process); for a module it does not know (a custom module, an
+    nxc newer than the file), the live `-L` of the other enabled protocols, as the gate reads it."""
+    known = _catalog_index().get(module)
+    if known:
+        return set(known)
+
+    async def _lists(proto):
+        try:
+            return proto if module in await _module_categories(get_config, proto) else None
+        except Exception:  # noqa: BLE001 -- a protocol whose -L fails just answers "not here"
+            return None
+
+    others = [p for p in get_config().protocols if p != requested]
+    return {p for p in await asyncio.gather(*[_lists(p) for p in others]) if p}
+
+
+def _wrong_protocol_error(module: str, protocol: str, supported: set[str], enabled: list[str]) -> str:
+    """nxc_run_module on a protocol that does not list the module: name the right one, never
+    switch to it silently, never point at a protocol NXC_PROTOCOLS leaves out."""
+    on = [p for p in enabled if p in supported]
+    off = sorted(supported - set(enabled))
+    if on:
+        msg = (f"{module!r} is not an nxc {protocol} module: nxc lists it for {', '.join(on)}. "
+               f"Nothing ran; re-run with protocol={on[0]!r}.")
+        if off:
+            msg += f" It also exists for {', '.join(off)}, which NXC_PROTOCOLS does not enable."
+        return msg
+    if off:
+        return (f"{module!r} is an nxc {', '.join(off)} module, and NXC_PROTOCOLS="
+                f"{','.join(enabled)} does not enable {'it' if len(off) == 1 else 'them'}. Nothing "
+                "ran; the operator has to enable the protocol to run it.")
+    return (f"unknown module {module!r}: nxc lists no such -M module for {protocol} or any enabled "
+            "protocol. Nothing ran; find the module's name with nxc_find_tool (dynamic mode) or "
+            "nxc_search_tools.")
+
+
 def register(mcp, get_config) -> None:
     """Attach the discovery + (offensive-gated) escape-hatch meta-tools."""
 
@@ -326,6 +379,10 @@ def register(mcp, get_config) -> None:
         modules run in `recon`; `CREDENTIAL_DUMPING` (read-only credential harvest) needs
         `NXC_MODE=loot`; `PRIVILEGE_ESCALATION`/unknown need `NXC_MODE=full`. If the
         category can't be determined, it is gated as full-only offensive (conservative).
+
+        Modules are protocol-specific (`raisechild` exists only for ldap, `nanodump` for smb
+        and mssql): nxc_find_tool's suggested_call carries the right protocol, and a protocol
+        that does not list the module gets an error naming the right one; nothing runs.
         """
         # A retired module is refused HERE, from a constant, before anything else. Two reasons
         # it cannot be derived from a live `-L`: `_module_categories` needs an execution, which
@@ -340,14 +397,22 @@ def register(mcp, get_config) -> None:
         cfg = get_config()
         offensive = True   # conservative default
         dump = False       # unknown -> full-only, not loot
-        if not cfg.dry_run:  # suggest mode previews regardless; classify only when executing
+        # Suggest mode previews regardless: classify only when executing, and only on an enabled
+        # protocol (execute() refuses the others, once in the audit).
+        if not cfg.dry_run and protocol in cfg.protocols:
             try:
                 cats = await _module_categories(get_config, protocol)
-                category = cats.get(module)
-                offensive = category != _RECON_CATEGORY
-                dump = category == _DUMP_CATEGORY  # loot-permitted credential dumping
-            except Exception:
-                offensive = True  # couldn't classify -> gate it
+            except Exception:  # noqa: BLE001 -- couldn't classify -> gate it
+                cats = {}
+            # A module this protocol does not list used to fall through to the full-only gate:
+            # "requires NXC_MODE=full" in recon/loot (the wrong reason), an nxc error in full.
+            # An EMPTY map is a failed -L, not an absent module: the conservative gate stays.
+            if cats and module not in cats:
+                supported = await _find_module_protocols(get_config, module, protocol)
+                raise ValueError(_wrong_protocol_error(module, protocol, supported, cfg.protocols))
+            category = cats.get(module)
+            offensive = category != _RECON_CATEGORY
+            dump = category == _DUMP_CATEGORY  # loot-permitted credential dumping
 
         auth = build_auth_flags(
             username=username, password=password, ntlm_hash=ntlm_hash, domain=domain,
