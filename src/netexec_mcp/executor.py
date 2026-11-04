@@ -37,7 +37,7 @@ from .guardrails import (
     check_protocol,
     check_scope,
     check_target_cap,
-    offensive_block_detail,
+    mode_block_detail,
     parse_scope,
     write_audit,
 )
@@ -472,18 +472,17 @@ async def execute(
         required = "loot" if dump else "full"
         if _current_tool.get():
             _gate_refusals[(_current_tool.get(), config.mode)] = required
-        # The loot-tier (dump) refusal from check_offensive is already precise; the full-tier
-        # one is generic, so replace its lead with a tool-aware detail (name a read-only sibling,
-        # or say plainly there is none -- so the agent stops hunting for an alternative).
-        lead = str(exc) if dump else offensive_block_detail(_current_tool.get())
+        # The agent reads a terminal, tool-aware refusal (guardrails.mode_block_detail) rather
+        # than check_offensive's generic one: the current mode, the action blocked whatever the
+        # tool, a read-only sibling when there is one, what to report.
+        lead = mode_block_detail(_current_tool.get(), config.mode, dump)
         write_audit(
             config.audit_log,
             {**audit_base, "outcome": "rejected", "reason": lead,
              "required_mode": required},
         )
         raise OffensiveBlocked(
-            f"{lead}\n\nRequires NXC_MODE={required}. Command that WOULD run "
-            f"(not executed): {resolved}"
+            f"{lead}\n\nCommand that WOULD run with NXC_MODE={required} (not executed): {resolved}"
         ) from exc
     except GuardrailError as exc:
         write_audit(
