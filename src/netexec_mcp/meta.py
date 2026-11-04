@@ -23,7 +23,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from .auth import build_auth_flags
-from .executor import execute
+from .executor import execute, gate_refusal
 
 # A module line in `nxc <proto> -L` output (after ANSI strip):
 #   [*] enum_av                   Gathers information on ...
@@ -282,9 +282,28 @@ async def _find_module_protocols(get_config, module: str, requested: str) -> set
     return {p for p in await asyncio.gather(*[_lists(p) for p in others]) if p}
 
 
-def _wrong_protocol_error(module: str, protocol: str, supported: set[str], enabled: list[str]) -> str:
+async def _dedicated_tool(mcp, module: str, protocol: str, enabled: list[str]) -> str | None:
+    """The curated tool that does what an unknown `-M` name asked for: nxc has no `rid-brute`
+    module, but smb_rid_brute exists. Its name is the module's under a protocol prefix
+    (`rid-brute` -> smb_rid_brute, `users` on ldap -> ldap_users, `smbexec` -> smb_exec), the
+    requested protocol first. Hidden tools count: dynamic mode only hides them from listing."""
+    name = module.strip().lower().replace("-", "_")
+    for proto in [protocol, *(p for p in enabled if p != protocol)]:
+        rest = name[len(proto):].lstrip("_") if name.startswith(proto) and len(name) > len(proto) else name
+        for cand in dict.fromkeys((f"{proto}_{name}", f"{proto}_{rest}")):
+            if await mcp.get_tool(cand) is not None:
+                return cand
+    return None
+
+
+def _wrong_protocol_error(module: str, protocol: str, supported: set[str], enabled: list[str],
+                          dedicated: str | None = None, dynamic: bool = True,
+                          mode: str = "full", needs: str | None = None) -> str:
     """nxc_run_module on a protocol that does not list the module: name the right one, never
-    switch to it silently, never point at a protocol NXC_PROTOCOLS leaves out."""
+    switch to it silently, never point at a protocol NXC_PROTOCOLS leaves out. A module that
+    exists nowhere is usually a capability asked under a module's name: name the dedicated tool
+    when there is one. Pointing at module search instead sent ministral-8b to nxc_search_tools
+    15 times out of 15, where the right tool sat in its list (bench decision-point eval, 2026-11-04)."""
     on = [p for p in enabled if p in supported]
     off = sorted(supported - set(enabled))
     if on:
@@ -297,9 +316,24 @@ def _wrong_protocol_error(module: str, protocol: str, supported: set[str], enabl
         return (f"{module!r} is an nxc {', '.join(off)} module, and NXC_PROTOCOLS="
                 f"{','.join(enabled)} does not enable {'it' if len(off) == 1 else 'them'}. Nothing "
                 "ran; the operator has to enable the protocol to run it.")
+    if dedicated and needs:
+        # The gate already refused the dedicated tool (`needs` is the mode that would run it).
+        # Naming it as the way out made qwen3-14b re-send smb_sam after recon had refused it, 3
+        # and 4 times out of 5, where it had reported the block (t3_offensive_in_recon; bench
+        # decision-point eval, 2026-11-04).
+        return (f"unknown module {module!r}: nxc has no such -M module. The dedicated tool "
+                f"{dedicated!r} does this, but the mode gate already refused it: it needs "
+                f"NXC_MODE={needs} and the mode is {mode}. Nothing ran, and no module or other tool "
+                "gets around the mode: report that the current mode blocks it.")
+    if dedicated:
+        how = f"nxc_call(name={dedicated!r}, arguments={{...}})" if dynamic else f"{dedicated}(...)"
+        return (f"unknown module {module!r}: nxc has no such -M module, but the dedicated tool "
+                f"{dedicated!r} does this. Nothing ran; call it instead: {how}.")
+    where = ("find it with nxc_find_tool(\"<what you want to do>\")" if dynamic else
+             "pick it from your smb_*/ldap_*/... tools (nxc_list_modules lists the real -M modules)")
     return (f"unknown module {module!r}: nxc lists no such -M module for {protocol} or any enabled "
-            "protocol. Nothing ran; find the module's name with nxc_find_tool (dynamic mode) or "
-            "nxc_search_tools.")
+            f"protocol. Nothing ran. For a capability rather than a module, a dedicated tool may do "
+            f"it: {where}.")
 
 
 def register(mcp, get_config) -> None:
@@ -409,7 +443,12 @@ def register(mcp, get_config) -> None:
             # An EMPTY map is a failed -L, not an absent module: the conservative gate stays.
             if cats and module not in cats:
                 supported = await _find_module_protocols(get_config, module, protocol)
-                raise ValueError(_wrong_protocol_error(module, protocol, supported, cfg.protocols))
+                dedicated = (None if supported else
+                             await _dedicated_tool(mcp, module, protocol, cfg.protocols))
+                raise ValueError(_wrong_protocol_error(
+                    module, protocol, supported, cfg.protocols, dedicated,
+                    cfg.tool_mode == "dynamic", cfg.mode,
+                    dedicated and gate_refusal(dedicated, cfg.mode)))
             category = cats.get(module)
             offensive = category != _RECON_CATEGORY
             dump = category == _DUMP_CATEGORY  # loot-permitted credential dumping
