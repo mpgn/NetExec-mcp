@@ -208,7 +208,8 @@ def check_offensive(
 # "a read-only tool likely exists" (which misroutes the agent off a confirmed path).
 READ_ONLY_SIBLINGS = {
     # verified against modules/mssql.py (mssql_enum_db does NOT exist)
-    "mssql_query": ["mssql_enum_logins", "mssql_enum_impersonate", "mssql_database"],
+    "mssql_query": ["mssql_enum_logins", "mssql_enum_impersonate", "mssql_database",
+                    "mssql_enum_links"],   # t2_mssql_links: agents queried sys.servers by hand
 }
 # Full-gated primitives with NO read-only equivalent: the agent must NOT go hunting for one.
 # Every name verified to be a registered, full-gated tool.
@@ -225,20 +226,51 @@ def has_no_readonly_analog(tool: str | None) -> bool:
     return bool(tool) and tool in _NO_ANALOG_EXACT
 
 
-def offensive_block_detail(tool: str | None) -> str:
-    """A tool-aware lead for a FULL-gated (non-dump) refusal. Names a concrete read-only sibling
-    when one exists; else says plainly there is no read-only equivalent (don't search); else the
-    soft generic line. Keeps the agent from looping on a search for a tool that cannot exist."""
-    if tool and tool in READ_ONLY_SIBLINGS:
+_PROTOCOL_PREFIXES = frozenset({"smb", "ldap", "winrm", "ssh", "mssql", "wmi", "rdp", "ftp", "nfs", "vnc"})
+
+
+def mode_block_detail(tool: str | None, mode: str, dump: bool) -> str:
+    """The mode-gate refusal the agent reads, both tiers. It has to be terminal: in the bench
+    reference of 2026-11-04, 15 of the 36 runs of the two gate tasks hit the step limit after a
+    refusal without ever reporting it. Not an identical re-send: nxc_health, the catalog, a
+    search, then the same action through another protocol (smb_sam -> wmi_sam, winrm_sam), the
+    old text saying "blocked in the current mode. Set NXC_MODE=loot" (the model can do neither:
+    it did not know the mode, and cannot set it) and, for a dump, that a dedicated tool likely
+    exists. So: the current mode by name, the ACTION blocked whatever the tool, only the
+    operator can change the mode, what to report. A full-tier tool with a read-only sibling
+    still names it; one with no read-only equivalent says so."""
+    if tool == "nxc_raw_command":
+        # Gated as a whole, whatever its command line runs: agents sent plain authentication
+        # checks through it in t2_find_mssql. A read-only command has a tool this mode runs;
+        # only an offensive one is to be reported.
+        return (f"nxc_raw_command runs a raw nxc command line, so it needs NXC_MODE=full whatever "
+                f"the command does, and the mode is {mode}. A read-only command (enumeration, an "
+                "authentication check) has a dedicated tool that runs in this mode: find it with "
+                "nxc_find_tool. An offensive one is blocked on every tool and only the operator "
+                "can change NXC_MODE: report which mode it needs (loot for a credential dump, full "
+                "for exec/write/spray/exploit).")
+    proto, _, action = (tool or "").partition("_")
+    named = bool(action) and proto in _PROTOCOL_PREFIXES
+    what = tool if named else "this action"
+    same = f"the *_{action} tools of other protocols and -M modules" if named else "other tools and -M modules"
+    if dump:
+        lead = (f"{what} dumps credential material (read-only, but it harvests secrets) and is "
+                f"blocked: NXC_MODE={mode} blocks every credential dump whatever the tool, so "
+                f"{same} are refused the same way.")
+    elif tool in READ_ONLY_SIBLINGS:
         sibs = ", ".join(READ_ONLY_SIBLINGS[tool])
         return (f"{tool} is offensive (write/exec) and is blocked. For read-only enumeration of "
-                f"the same thing use instead: {sibs}.")
-    if has_no_readonly_analog(tool):
-        return (f"{tool} is an offensive primitive with NO read-only equivalent -- do NOT search "
-                f"for an alternative tool; it simply requires a higher mode.")
-    return ("this action is offensive (exec/write/spray/exploit) and is blocked. If you only need "
-            "read-only enumeration, a dedicated non-gated tool may exist -- find it with "
-            "nxc_find_tool; do not guess.")
+                f"the same thing use instead: {sibs}. If the task needs {tool} itself, report that "
+                "it needs NXC_MODE=full: only the operator can change NXC_MODE, no tool call can.")
+    else:
+        lead = (f"{what} is offensive (exec/write/spray/exploit) and is blocked: NXC_MODE={mode} "
+                f"blocks every such action whatever the tool, so {same} are refused the same way.")
+        lead += (f" {tool} has NO read-only equivalent: do NOT search for an alternative tool."
+                 if has_no_readonly_analog(tool) else
+                 " Read-only enumeration is not gated: if that is all you need, nxc_find_tool can "
+                 "find the tool.")
+    return (f"{lead} Only the operator can change NXC_MODE; no tool call can. Nothing ran: report "
+            f"that this action needs NXC_MODE={'loot (or full)' if dump else 'full'}.")
 
 
 def check_protocol(protocol: str, enabled: list[str]) -> None:
