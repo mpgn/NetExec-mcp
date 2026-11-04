@@ -81,6 +81,12 @@ DYNAMIC_INSTRUCTIONS = (
     "`targets` accepts an IP, a CIDR (10.0.0.0/24), an nxc range (10.0.0.1-20), or a hostname "
     "-- a CIDR/range scans every host in it, so pass the whole scope at once instead of asking "
     "for individual IPs.\n"
+    "Results of EARLIER nxc runs (this session or before it) persist in the nxc workspace DB: "
+    "credentials, who is admin where, who is logged in where, hosts. When asked what is already "
+    "known or collected, query it BEFORE re-scanning, and never assume it is empty because you "
+    "have not run anything yet: nxc_call(name=\"workspace_admins\") (likewise workspace_creds, "
+    "workspace_loggedin, workspace_hosts, workspace_cred_reach) needs no arguments and contacts "
+    "no target.\n"
     "The recon/loot/full permission gate still applies to whatever nxc_call runs."
 )
 
