@@ -34,6 +34,7 @@ from .guardrails import (
     GuardrailError,
     OffensiveBlocked,
     check_offensive,
+    check_protocol,
     check_scope,
     check_target_cap,
     offensive_block_detail,
@@ -415,7 +416,7 @@ async def execute(
     """Build, guard, and (unless dry-run) run an nxc command, parsing markers.
 
     Guardrails are enforced here -- the single choke point every tool funnels
-    through -- so scope/offensive/cap checks cannot be bypassed. Every command
+    through -- so protocol/scope/offensive/cap checks cannot be bypassed. Every command
     (executed, dry-run, or rejected) is written to the audit log. `ccache`, if given,
     sets KRB5CCNAME for the subprocess so `--use-kcache` reads that specific ticket
     cache (nxc has no ccache flag; it is env-only).
@@ -442,6 +443,8 @@ async def execute(
         audit_base["folded_args"] = folded
 
     try:
+        # Dry-run included: a suggested command must not name a disabled protocol either.
+        check_protocol(protocol, config.protocols)
         check_target_cap(targets, config.max_targets)
         check_scope(targets, parse_scope(config.scope), resolve=_resolve_host)
         # In suggest mode (dry_run) nothing executes, so we still surface the

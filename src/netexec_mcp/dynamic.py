@@ -516,7 +516,7 @@ def search(index, query: str, protocol: str | None = None, limit: int = 8) -> li
 _MODULE_META = frozenset({"nxc_list_modules", "nxc_search_tools", "nxc_run_module"})
 _WEAK_MATCH_SCORE = 20.0     # below the lowest legit tool score (~30 for "check antivirus")
 _MODULE_HINT = (
-    'For a specific nxc `-M` module (e.g. ms17-010, spooler, petitpotam): run it with '
+    'For a specific nxc `-M` module (e.g. ms17-010 or spooler on smb, raisechild on ldap): run it with '
     'nxc_run_module(protocol="<proto>", module="<name>", targets=[...]), or browse with '
     'nxc_list_modules(protocol="<proto>"). Modules are protocol-specific -- use the protocol on '
     'the match, not a guess.'
