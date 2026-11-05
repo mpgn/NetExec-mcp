@@ -252,6 +252,45 @@ def build_verdict(records, returncode=None, unparsed_lines=0, stderr=""):
     return verdict, outcome_class, op_error, op_error_note
 
 
+# nxc actions decorated @requires_admin (nxc/connection.py): for a login that is not admin on
+# the host (no privilege label on its [+] line) nxc returns before running them and prints
+# nothing, so the call reads as a successful login with an empty result. In the bench reference
+# of 2026-11-04 that "success" came back 50 times, 42 of them mssql_exec as a non-sysadmin, and
+# models reported command output that never came back. The flags of those actions, per
+# protocol, checked against nxc 1.5.1 (6965632b).
+ADMIN_ONLY_FLAGS = {
+    "smb": frozenset({"-x", "-X", "--sam", "--lsa", "--dpapi", "--sccm", "--qwinsta",
+                      "--tasklist", "--taskkill", "--wmi-query", "--list-snapshots"}),
+    "mssql": frozenset({"-x", "-X", "--put-file", "--get-file", "--sam", "--lsa", "--dpapi",
+                        "--db-hash"}),
+    "wmi": frozenset({"-x", "--get-file", "--sam", "--lsa", "--ntds", "--wmi-query", "--sccm",
+                      "--dpapi"}),
+}
+
+
+def admin_only_flags(protocol: str, argv: list[str]) -> list[str]:
+    """The flags in `argv` that nxc runs only for an admin login, in argv order. Empty with
+    `--exec-method mmcexec`, which nxc's decorator lets through whatever the rights."""
+    flags = ADMIN_ONLY_FLAGS.get(protocol, frozenset())
+    if "--exec-method" in argv[:-1] and argv[argv.index("--exec-method") + 1] == "mmcexec":
+        return []
+    return list(dict.fromkeys(tok for tok in argv if tok in flags))
+
+
+def admin_skip_note(flags: list[str], verdict: dict, pwn3d_label: str = "Pwn3d!") -> str | None:
+    """The note for an admin-only action that met a login without admin rights: nxc skipped
+    it on those hosts. None when no such host (or no admin-only flag)."""
+    skipped = [a for a in verdict.get("authenticated", []) if not a.get("pwned")]
+    if not flags or not skipped:
+        return None
+    hosts = ", ".join(dict.fromkeys(a.get("host") or "the target" for a in skipped))
+    users = ", ".join(dict.fromkeys(a.get("user") or "the account" for a in skipped))
+    what = " ".join(flags)
+    return (f"{users} logged in on {hosts} but is not admin there (no ({pwn3d_label}) label): nxc "
+            f"runs {what} only for an admin (sysadmin on MSSQL), so it skipped it. The login "
+            f"worked, {what} did not run there, and the same account will not change that.")
+
+
 # Keys whose list value is NOT a dedicated-parser payload, so their presence must not trigger
 # the stdout cap: `command` is the argv, `records` is the cross-tool marker summary.
 _TRIM_EXCLUDE = frozenset({"command", "records"})
