@@ -1,207 +1,210 @@
 # netexec-mcp
 
-An [MCP](https://modelcontextprotocol.io) server that lets an AI agent drive
-**[NetExec](https://github.com/Pennyw0rth/NetExec)** (`nxc`) for **authorized**
-security testing only.
+An [MCP](https://modelcontextprotocol.io) server that plugs [NetExec](https://github.com/Pennyw0rth/NetExec) (`nxc`) into an AI agent: Claude Code, Cursor, opencode, or your own. The agent calls NetExec as one of its tools, inside the scope and mode you set. **For authorized security testing only.**
 
-It is a **pure subprocess wrapper**: it shells out to the `nxc` CLI as an argv list
-(never `shell=True`, never importing NetExec as a library) and declares **no** nxc
-dependency. How nxc itself is installed (PATH / uv / pipx / docker) is entirely up to you.
-
-With recon mode:
+Recon mode:
 <img src="https://raw.githubusercontent.com/mpgn/NetExec-mcp/main/netexec-mcp-recon-shares.svg"
      width="100%" alt="NetExec-MCP recon mode">
 
-With full mode:
+Full mode:
 <img src="https://raw.githubusercontent.com/mpgn/NetExec-mcp/main/netexec-mcp-full-gmsa.svg"
      width="100%" alt="NetExec-MCP gmsa mode">
 
-## Status
+## Why
 
-**v1 — all 10 nxc protocols, 135 tools** (121 protocol tools + 9 discovery/meta-tools +
-5 offline workspace-DB readers). SMB, LDAP, WinRM, MSSQL, SSH, RDP, WMI, FTP, NFS, and VNC
-are built out (native flags, credential dumping/gathering, command exec, file transfer, promoted
-high-value `-M` modules, and structured output). The first seven are validated end-to-end against a
-live AD lab; FTP/NFS/VNC are source-verified + unit-tested (no lab yet). A 3-level safety model gates
-everything; the long tail of nxc `-M` modules is reachable via meta-tools.
+Instead of letting the agent type `nxc` commands in a shell:
 
-## Built for small / local models
+- **Fewer tokens.** The agent sees 5 small meta-tools (about 1k tokens) and looks up the tool it needs, instead of parsing the `nxc` help to work out the right command. Small local models fit, and big ones cost less.
+- **Scope enforced.** Every target is checked against `NXC_SCOPE`. Anything outside is refused.
+- **Actions under control.** `NXC_MODE` decides what the agent may run, from suggesting commands only to full exploitation.
+- **Structured results.** Shares, hashes and admin rights come back as JSON fields, not terminal text.
+- **Audit log.** Every command, whether it ran, was previewed or was refused, is logged.
 
-With 135 tools, listing every one to the model would spend ~46k tokens of context
-before any work starts enough to overflow a small-context (≤8B / 32k) model and to
-make every call on a large one needlessly expensive. So the default `NXC_TOOL_MODE`
-is **`dynamic`**: only a handful of meta-tools are exposed (`nxc_catalog`,
-`nxc_find_tool`, `nxc_describe_tool`, `nxc_call`, `nxc_health`), and the model
-discovers and dispatches the real tools on demand. This keeps the tool surface out
-of the context window required to run on small local models, and cheaper (same
-quality) on large ones. Set `NXC_TOOL_MODE=static` to opt out and list every tool. See
-the `NXC_TOOL_MODE` row under [Configuration](#configuration-env-vars) and the
-step-budget note beneath it.
+It covers the 10 nxc protocols and NetExec's `-M` modules. SMB, LDAP, WinRM, MSSQL, SSH, RDP and WMI are tested against a live Active Directory lab; FTP, NFS and VNC are unit-tested only.
 
-## Requirements
+## Install
 
-- Python ≥ 3.10, [`uv`](https://docs.astral.sh/uv/) or [`pipx`](https://pipx.pypa.io/)
-- **NetExec installed separately** — it is not a pip dependency and is not on PyPI.
-  See the [official install guide](https://www.netexec.wiki/getting-started/installation).
-  Any install works as long as `nxc` / `netexec` is reachable on `PATH` or via
-  `NXC_COMMAND`; the server runs `nxc --version` on boot and refuses to start if it
-  can't find it.
-
-## Quick start
-
-### Option A: uv (run from a source checkout)
+NetExec is not a dependency: install it first ([installation guide](https://www.netexec.wiki/getting-started/installation)). Then, with Python 3.10 or later:
 
 ```bash
+pipx install netexec-mcp
+# or
+uv tool install netexec-mcp
+```
+
+On startup the server runs `nxc --version` and refuses to start if NetExec is not found. If `nxc` is not on your `PATH`, set `NXC_COMMAND`, e.g. `NXC_COMMAND="uv run --no-sync --directory /opt/NetExec netexec"`.
+
+### From source
+
+```bash
+git clone https://github.com/mpgn/NetExec-mcp && cd NetExec-mcp
 uv sync
-
-# Point at your nxc install (example: a uv-managed source checkout)
-export NXC_COMMAND="uv run --no-sync --directory ~/NetExec netexec"
-export NXC_SCOPE="10.0.0.0/24"          # required to target anything (fail-closed)
-
-uv run netexec-mcp
+NXC_SCOPE=10.0.0.0/24 uv run netexec-mcp
 ```
 
-`--no-sync` matters for a source checkout. Without it, every nxc call re-syncs the environment
-under a lock, so concurrent calls run one after another (4 simultaneous calls: about 7 s instead of
-1 s). The price: run `uv sync` in the NetExec checkout after each update, since nothing re-syncs
-it for you any more. Keep the `uv run --directory` form rather than the venv's `netexec` binary:
-`--directory` also runs nxc from the checkout, so its relative output paths stay in one place.
+In your agent's config, launch it with `uv` and the arguments `run --directory /path/to/NetExec-mcp netexec-mcp` (see `.mcp.json.example`). If NetExec also runs from a source checkout, keep `--no-sync` in `NXC_COMMAND`: without it, each nxc call re-syncs NetExec's environment under a lock and parallel calls run one after another. Run `uv sync` in the NetExec checkout after each update.
 
-MCP client config (`command`/`args` launch the server itself):
+## Configure
+
+The server is configured with environment variables, passed by your agent (see below).
+
+| Variable | What it does | Default |
+| --- | --- | --- |
+| `NXC_SCOPE` | **Required.** Allowed targets: IPs, CIDRs, ranges or hostnames, comma-separated. | _none_ |
+| `NXC_MODE` | `suggest`, `recon`, `loot` or `full` (see below). | `recon` |
+| `NXC_AUDIT_LOG` | Path of the audit log file. Strongly recommended. | _none_ |
+| `NXC_COMMAND` | How to launch NetExec, if it is not on your `PATH`. | `nxc` or `netexec` on `PATH` |
+| `NXC_PROTOCOLS` | Restrict the tools to some protocols, e.g. `smb,ldap`. | all 10 protocols |
+| `NXC_PATH` | NetExec home directory (config and workspace databases). | `~/.nxc` |
+
+Each mode includes the previous one:
+
+| Mode | What the agent can run |
+| --- | --- |
+| `suggest` | Nothing. Tools return the `nxc` command they would run, for you to run. |
+| `recon` _(default)_ | Read-only enumeration: hosts, shares, users, groups, policies... |
+| `loot` | + credential collection: SAM, LSA, NTDS, GPP, Kerberoasting, AS-REP roasting. |
+| `full` | + everything else: command execution, uploads, spraying, coercion, exploits. |
+
+Scope and mode are read once at startup. The agent cannot change them; to raise them, edit the config and restart the server. Every setting is listed in the [reference](#configuration-env-vars) below.
+
+## Plug it into your agent
+
+### Claude Code
+
+```bash
+claude mcp add netexec \
+  -e NXC_SCOPE=10.0.0.0/24 \
+  -e NXC_MODE=recon \
+  -e NXC_AUDIT_LOG=~/.netexec-mcp/audit.jsonl \
+  -- netexec-mcp
+```
+
+Check with `claude mcp list`, or `/mcp` inside Claude Code.
+
+### Cursor, Claude Desktop
+
+For Cursor, add this to `~/.cursor/mcp.json` (all projects) or `.cursor/mcp.json` (one project). For Claude Desktop, open **Settings > Developer > Edit Config**, add it to `claude_desktop_config.json` and restart.
 
 ```json
 {
-  "command": "uv",
-  "args": ["run", "--directory", "/path/to/netexec-mcp", "netexec-mcp"]
+  "mcpServers": {
+    "netexec": {
+      "command": "netexec-mcp",
+      "env": {
+        "NXC_SCOPE": "10.0.0.0/24",
+        "NXC_MODE": "recon",
+        "NXC_AUDIT_LOG": "~/.netexec-mcp/audit.jsonl"
+      }
+    }
+  }
 }
 ```
 
-### Option B: install from PyPI (standalone `netexec-mcp` CLI)
+Desktop apps may not see your shell `PATH`. If the server does not start, use the absolute path of `netexec-mcp` (`which netexec-mcp`) and set `NXC_COMMAND` to the full path of `nxc`.
 
-```bash
-# Pick one installer — all put `netexec-mcp` on PATH:
-pipx install netexec-mcp                 # pipx
-uv tool install netexec-mcp              # uv
-# or run without installing:
-uvx netexec-mcp                          # uv, one-shot
+### opencode + Ollama (local)
 
-export NXC_COMMAND="nxc"                 # or however your nxc install is invoked
-export NXC_SCOPE="10.0.0.0/24"
-
-netexec-mcp
-```
-
-MCP client config — `netexec-mcp` is on `PATH`, so no `uv`/`--directory` wrapper:
+Add to `opencode.json`, next to your Ollama provider:
 
 ```json
 {
-  "command": "netexec-mcp",
-  "args": []
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "netexec": {
+      "type": "local",
+      "command": ["netexec-mcp"],
+      "environment": {
+        "NXC_SCOPE": "10.0.0.0/24",
+        "NXC_MODE": "recon",
+        "NXC_AUDIT_LOG": "~/.netexec-mcp/audit.jsonl"
+      }
+    }
+  }
 }
 ```
 
-On boot the server runs `<base> --version` and **refuses to start** if it fails
-(unless mode `suggest`, which downgrades that to a warning). See `.mcp.json.example`
-for a ready-to-edit MCP client config (uv variant).
+Use a model with solid tool calling (Qwen3 14B is a good start) and at least 32k tokens of context.
 
-## Operating modes (`NXC_MODE`)
+### Your own agent (Python)
 
-Four escalating levels of how much the server is allowed to *do*:
+Any MCP SDK works. With [Pydantic AI](https://github.com/pydantic/pydantic-ai) (`pip install pydantic-ai`):
 
-| Mode | What runs | Use when |
+```python
+from fastmcp.client.transports import StdioTransport
+from pydantic_ai import Agent
+from pydantic_ai.mcp import MCPToolset
+
+netexec = MCPToolset(
+    StdioTransport(
+        command="netexec-mcp",
+        args=[],
+        env={"NXC_SCOPE": "10.0.0.0/24", "NXC_MODE": "recon"},
+    ),
+    include_instructions=True,  # give the agent the server's instructions (off by default)
+)
+
+# Any Pydantic AI model works. "ollama:" reads OLLAMA_BASE_URL (e.g. http://localhost:11434/v1)
+agent = Agent("ollama:qwen3:14b", toolsets=[netexec])
+
+result = agent.run_sync("Which hosts in scope don't require SMB signing?")
+print(result.output)
+```
+
+Each action takes about two tool calls (find the tool, then run it). If your agent caps the number of steps per answer, raise it.
+
+## Use it
+
+Ask the agent to "run a NetExec health check": it should answer with your NetExec version. Then give it tasks:
+
+- _"Which hosts in 10.0.0.0/24 don't require SMB signing?"_
+- _"With robin / Summer2026!, which shares can I write to?"_
+- _"Kerberoast the domain with these credentials."_ (needs `loot`)
+- _"Dump LSA on 10.0.0.12 and see if anything lets me move further."_ (needs `loot`, `full` to run commands)
+
+Before you start:
+
+- **One `NXC_PATH` per engagement.** The agent can read credentials stored in NetExec's workspace database, including ones from a previous engagement.
+- **Cloud models see your results.** Usernames, hashes and hostnames are sent to the model provider. Use a local model if the rules of engagement require it.
+- **For authorized testing only.**
+
+## Learn more
+
+- [Building a MCP for NetExec](https://mpgn.fr/building-a-mcp-for-netexec/): how netexec-mcp works, in depth.
+- [You're Building Your MCP Wrong](https://mpgn.fr/youre-building-your-mcp-wrong/): why the dynamic mode exists, with benchmarks.
+
+## Reference
+
+### Configuration (env vars)
+
+| Variable | What it does | Default |
 | --- | --- | --- |
-| `suggest` | **Nothing executes.** Tools return the resolved nxc command for a human (the auditor) to run. Scope still enforced; offensive commands *can* be previewed. | You want the agent to plan commands you run yourself. |
-| `recon` _(default)_ | Read-only enumeration; executes, credential-dumping and state-changing actions are refused. | Day-to-day authorized recon. |
-| `loot` | Recon **plus** read-only credential-dumping (sam/lsa/ntds/gpp/roasting) — no state change on the target, but it harvests credential material. | Authorized credential-harvesting. |
-| `full` | Everything executes, including state-changing / privilege-escalation actions (exec, write, spray, coercion-with-listener, exploits). | Authorized active testing. |
+| `NXC_SCOPE` | Allowed targets (IPs, CIDRs, ranges, hostnames), comma-separated. Fail-closed: with no scope, every target is refused. | _none_ |
+| `NXC_MODE` | `suggest`, `recon`, `loot` or `full`. | `recon` |
+| `NXC_COMMAND` | How to launch NetExec, parsed like a shell command, e.g. `uv run --no-sync --directory ~/NetExec netexec`. | `nxc` or `netexec` on `PATH` |
+| `NXC_PROTOCOLS` | Protocols to expose, comma-separated. | all 10 |
+| `NXC_TOOL_MODE` | `dynamic`: the agent sees 5 meta-tools and looks up the others. `static`: every tool is listed up front, which costs tens of thousands of tokens of context; use it only with a large-context model that should skip the lookup. | `dynamic` |
+| `NXC_MODULE_CATALOG` | Where dynamic mode finds the `-M` modules: `static` (the list shipped with the server) or `live` (`nxc <proto> -L` at startup, for custom modules or an nxc newer than the list). The mode gate always reads the installed nxc. | `static` |
+| `NXC_TIMEOUT` | Timeout of one call, in seconds. | `300` |
+| `NXC_MAX_TARGETS` | Maximum targets in one call. | `256` |
+| `NXC_AUDIT_LOG` | Audit log, one JSON line per command: run, previewed or refused. | _none_ |
+| `NXC_LOG_DIR` | One nxc log file per executed call, with the full raw output even when the agent's view of it is capped. Holds secrets: files are created `0600`. | _none_ |
+| `NXC_PATH` | NetExec home (`nxc.conf`, workspace databases). Passed on to nxc, so the server reads where nxc writes. Use one per engagement. | `~/.nxc` |
+| `NXC_WORKSPACE` | Workspace the `workspace_*` readers look in. Read side only: nxc keeps writing to the workspace set in its `nxc.conf`. | `nxc.conf`'s, else `default` |
+| `NXC_DOWNLOADS_DIR` | Where retrieved files land (e.g. `smb_get_file`) when the call gives no absolute path. | `<NXC_PATH>/downloads` |
 
-`NXC_MODE` is the canonical control; it defaults to `recon` when unset.
+### Resources
 
-## Configuration (env vars)
+The server also publishes guides and data as MCP resources:
 
-| Var | Purpose | Default |
-| --- | --- | --- |
-| `NXC_COMMAND` | Base command (shlex-parsed). Falls back to `nxc`/`netexec` on `PATH`. | autodetect |
-| `NXC_PROTOCOLS` | Comma-separated protocols to enable (e.g. `smb,ldap`). | all implemented |
-| `NXC_TOOL_MODE` | Tool-surface presentation — `dynamic` (**default**: expose only meta-tools; the ~100-tool surface is discovered via `nxc_find_tool`/`nxc_catalog` and run via `nxc_call`) or `static` (list every tool). Dynamic keeps the ~46k-token surface out of the context window — required for small-context models, ~8× cheaper (same quality) on large ones. Set `static` to opt out (best for a decisive model, or to avoid discovery round-trips on a big-context model). | `dynamic` |
-| `NXC_MODULE_CATALOG` | Where dynamic mode's `-M` module catalog comes from — `static` (**default**: the list shipped in `netexec_mcp/data/nxc_modules.json`, no nxc process at startup, same index on every start) or `live` (ask the installed nxc, one `nxc <proto> -L` per protocol at startup: needed for custom modules in `NXC_PATH/modules` or an nxc newer than the list). Discovery only: `nxc_run_module`'s mode gate always reads the module category from the installed nxc. Regenerate the list after an nxc update with `scripts/gen_module_catalog.py`; the server warns at startup when the installed nxc version differs. | `static` |
-| `NXC_SCOPE` | Comma-separated target allowlist (IP/CIDR/range/hostname). **Fail-closed**: targets with no scope are rejected. | _(none)_ |
-| `NXC_MODE` | Operating level — `suggest` / `recon` / `loot` / `full`. | `recon` |
-| `NXC_TIMEOUT` | Per-call timeout (seconds). | `300` |
-| `NXC_MAX_TARGETS` | Max target tokens per call. | `256` |
-| `NXC_AUDIT_LOG` | Path to an append-only JSONL audit log. | _(none)_ |
-| `NXC_LOG_DIR` | Directory for one nxc log per executed call (nxc's `--log`): the full raw output, kept even when the model-facing `stdout` is capped. Each file is created `0600` (directory `0700`); its path is returned as `log_file` and recorded in the audit log. **Holds secrets** (the argv and anything dumped). | _(none)_ |
-| `NXC_WORKSPACE` | nxc workspace the `workspace_*` readers look in. **Read-side only** — it does _not_ change where nxc writes (nxc takes its workspace from `nxc.conf`, which this does not touch). To isolate a run, set `NXC_PATH`, not this. | _(none — reads nxc.conf's `workspace`, else `default`)_ |
-| `NXC_PATH` | Override nxc's home dir (mirrors nxc's own `NXC_PATH`). Inherited by the nxc subprocess, so it sets where nxc **writes** (`nxc.conf`, `workspaces/*.db`) **and** where the MCP **reads** — both sides agree on one home. | `~/.nxc` |
+- `netexec://guide/operating-modes`, `netexec://guide/auth`, `netexec://guide/workflows` (including the cross-protocol gMSA chain), `netexec://guide/workspace`, `netexec://guide/safety`
+- `netexec://catalog/tools`: the tool inventory
+- `netexec://workspace/credentials`, `/admins`, `/loggedin`, `/hosts`: the NetExec workspace database, like the `workspace_*` tools
 
-> **Per-run isolation (one lab per run).** Give each run a unique `NXC_PATH`
-> (e.g. `NXC_PATH=/runs/lab-x`) and that run gets its own nxc home: nxc writes
-> its `workspaces/` there and the `workspace_*` readers read from the same place,
-> so reads and writes always coincide with **zero shared state**. Separate homes
-> never collide, so runs may execute **concurrently** without racing on
-> `nxc.conf`. Confirm the active home at any time via `nxc_health` (`nxc_home` +
-> `workspace` fields). Tear a run down by deleting its directory. A fresh home is
-> initialised by nxc on first use (it creates `nxc.conf` and the per-protocol DBs).
+### Safety
 
-> **Dynamic mode needs a bigger client-side step budget.** `max_steps` (how many tool
-> calls the agent may make) is **not** an MCP setting — the server can't see or set it.
-> It lives in your client's agent loop. In `dynamic` mode each action costs ~2 calls
-> (`nxc_find_tool` → `nxc_call`), so a chain that needs 4 calls in `full` needs ~10 in
-> `dynamic`. Set the budget high enough there, e.g. mcp-use:
-> ```python
-> MCPAgent(llm=ChatOllama(model="qwen3:14b"), client=client, max_steps=30)  # default is 5 — too low
-> ```
-> Other clients (Claude Desktop, Cursor, Cline, …) have their own max-iterations
-> setting. The MCP can only *hint* this via its startup `instructions`; it can't enforce it.
-
-## Resources
-
-The server publishes cheatsheets as MCP resources so an agent can ground itself:
-
-- `netexec://guide/operating-modes`
-- `netexec://guide/auth`
-- `netexec://guide/workflows` (incl. the cross-protocol gMSA chain)
-- `netexec://guide/workspace` (cached recall vs. live — when to use which)
-- `netexec://guide/safety`
-- `netexec://catalog/tools` (live, auto-generated tool inventory)
-- `netexec://workspace/credentials`, `/admins`, `/loggedin`, `/hosts` (workspace DB data,
-  same source as the `workspace_*` tools, filterless)
-
-## Safety & guardrails
-
-Enforced at a single choke point before any command runs:
-
-- **Scope allowlist** (`NXC_SCOPE`) — every target checked; **fail-closed**.
-- **Mode gating** (`NXC_MODE`) — offensive actions refused outside `full`.
-- **Target cap** + per-call **timeout**.
-- **Audit log** — every command (executed / dry-run / rejected) appended as JSON.
-- **No shell** — nxc is invoked as an argv list; nothing is shell-interpreted.
-
-## Example: the gMSA credential chain
-
-```
-smb_lsa (full)            -> secrets[] incl. { type: "gmsa_id", gmsa_id, ntlm }
-ldap_gmsa_convert_id      -> resolves the gmsa_id to an account name (gmsa-robin$)
-<any tool>                -> replay with username="gmsa-robin$", ntlm_hash=<nt>
-```
-
-## Development
-
-```bash
-uv run pytest -q          # mocked-subprocess unit tests (no nxc/network needed)
-```
-
-Architecture and milestone history live in `PLAN.md`. Tools/flags are verified against
-the nxc source (`nxc/protocols/<proto>/proto_args.py`) — `--help` lists args the
-handlers reject.
+Every command goes through one checkpoint before it runs: the scope allowlist (fail-closed), the mode gate, the target cap and the timeout. Each command is written to the audit log, whether it ran, was previewed or was refused. nxc is run as an argument list, never through a shell, and NetExec is never imported as a library.
 
 ### nxc version
 
-This MCP is a subprocess wrapper and pins no nxc dependency, but its tools/flags are
-verified against a specific nxc build:
-
-> **nxc 1.5.1 "Yippie-Ki-Yay", commit `9ec65be0`** (`9ec65be0…`, 2026-10-11, build 990)
-
-Check your local build with `nxc --version` (it prints `version - codename - commit - build`).
-nxc moves fast and occasionally moves/removes flags, so when you bump nxc, re-verify the
-affected protocol's `proto_args.py` + handler and re-run the tests.
+The tools and their flags are checked against **nxc 1.5.1 "Yippie-Ki-Yay", commit `6965632b`** (2026-10-31, build 1174). Check yours with `nxc --version`. NetExec moves fast and sometimes renames or removes flags, so a much newer or older nxc may reject some of them.
