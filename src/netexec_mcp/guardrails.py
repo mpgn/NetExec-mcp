@@ -44,6 +44,10 @@ class ProtocolNotEnabled(GuardrailError):
     """The protocol is not in the NXC_PROTOCOLS allowlist."""
 
 
+class MissingCredential(GuardrailError):
+    """An admin-only action was asked for without any credential: nxc would skip it."""
+
+
 # --------------------------------------------------------------------------- #
 # Scope
 # --------------------------------------------------------------------------- #
@@ -283,6 +287,39 @@ def check_protocol(protocol: str, enabled: list[str]) -> None:
             f"protocol {protocol!r} is not enabled (NXC_PROTOCOLS={','.join(enabled)}); nothing "
             "ran. Use an enabled protocol, or ask the operator to add it to NXC_PROTOCOLS."
         )
+
+
+# The flags that give nxc an identity to log in with (its login(): a username, a stored
+# credential, a Kerberos cache). A certificate or LAPS login takes a username too.
+_IDENTITY_FLAGS = frozenset({"-u", "-id", "--use-kcache"})
+# Actions that need a login without being admin-only in nxc's sense: with no credential nxc
+# still tries them and fails (smb --ntds: "Dumped 0 NTDS hashes"; winrm: no shell to run in).
+_LOGIN_FLAGS = {
+    "smb": frozenset({"--ntds"}),
+    "winrm": frozenset({"-x", "-X", "--sam", "--lsa", "--dpapi", "--put-file", "--get-file"}),
+}
+
+
+def check_credential(tool: str | None, protocol: str, admin_flags: list[str],
+                     tool_flags: list[str]) -> None:
+    """An admin-only action (results.ADMIN_ONLY_FLAGS), a dump or an exec needs a login. Sent
+    with no credential, nxc logs in as nobody and skips or fails it, and the call came back as
+    an "ok": 15 times in the bench reference of 2026-11-04 (sam, lsa and ntds over smb, wmi and
+    winrm), mostly sent with local_auth=true and no username. `tool_flags` are the tool's
+    flags, without the base command (a `python -u` is not a username)."""
+    if any(tok in _IDENTITY_FLAGS for tok in tool_flags):
+        return
+    login = _LOGIN_FLAGS.get(protocol, frozenset())
+    needed = list(dict.fromkeys([*admin_flags, *(tok for tok in tool_flags if tok in login)]))
+    if not needed:
+        return
+    what = " ".join(needed)
+    raise MissingCredential(
+        f"{tool + ' (' + what + ')' if tool else what} needs a login, and this call has no "
+        "credential (no username, cred_id or Kerberos cache): nxc would connect as nobody and "
+        "skip it or fail. Nothing ran. Pass username with password or ntlm_hash "
+        "(local_auth=true for a local account such as Administrator)."
+    )
 
 
 def check_target_cap(targets: list[str], max_targets: int) -> None:

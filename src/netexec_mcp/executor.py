@@ -33,6 +33,7 @@ from .config import Config
 from .guardrails import (
     GuardrailError,
     OffensiveBlocked,
+    check_credential,
     check_offensive,
     check_protocol,
     check_scope,
@@ -41,7 +42,14 @@ from .guardrails import (
     parse_scope,
     write_audit,
 )
-from .results import StatusRecord, build_verdict, count_unmarked_lines, parse_markers
+from .results import (
+    StatusRecord,
+    admin_only_flags,
+    admin_skip_note,
+    build_verdict,
+    count_unmarked_lines,
+    parse_markers,
+)
 
 # Matches CSI / SGR escape sequences such as the colour codes nxc emits.
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
@@ -434,6 +442,10 @@ async def execute(
     """
     targets = list(targets or [])
     argv = build_command(config.base_command, protocol, targets, extra_args)
+    # Read from the tool's own flags, not the argv: a base command can carry its own -x/-X/-u
+    # (`python -X utf8`, `python -u`).
+    tool_flags = list(extra_args or [])
+    admin_flags = admin_only_flags(protocol, tool_flags)
     resolved = " ".join(shlex.quote(tok) for tok in argv)
     audit_base = {
         "command": argv,
@@ -464,6 +476,7 @@ async def execute(
         if not config.dry_run:
             check_offensive(config.allow_offensive, offensive,
                             dump=dump, allow_loot=config.allow_loot)
+            check_credential(_current_tool.get(), protocol, admin_flags, tool_flags)
     except OffensiveBlocked as exc:
         # Blocked ONLY by the mode gate (not scope/cap): surface the exact command we WOULD
         # run and the mode that permits it, so the auditor can run it by hand or flip
@@ -518,6 +531,14 @@ async def execute(
     verdict, outcome_class, op_error, op_error_note = build_verdict(
         records, result.returncode, unparsed_lines, result.stderr
     )
+    # An admin-only action the login is not admin for: nxc skipped it silently, so a plain
+    # "success" would read as if it had run. Terminal like any op_error; the call stays a
+    # success only where some host was admin and ran it.
+    skip_note = admin_skip_note(admin_flags, verdict, config.pwn3d_label)
+    if skip_note and not op_error:
+        op_error, op_error_note = "admin_required", skip_note
+        if not verdict["pwned"]:
+            outcome_class = "op_error"
     write_audit(
         config.audit_log,
         {
