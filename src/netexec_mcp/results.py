@@ -58,8 +58,12 @@ class StatusRecord:
 _TRAILING_QUAL_RE = re.compile(r"\(([^)]+)\)\s*$")
 # A real auth line starts with `user:` (AD form `DOMAIN\user:`, or a bare `user:` for SSH/FTP/
 # VNC). The leading `[^:\s]+:` (no space before the colon) still excludes non-auth `[+]` lines
-# like "[+] Response for object:" (space before the colon) and "[+] Dumping ...".
-_AUTH_CRED_RE = re.compile(r"^[^:\s]+:")
+# like "[+] Response for object:" (space before the colon) and "[+] Dumping ...". Two `[-]`
+# lines have that shape without being auth lines: impacket's T-SQL error "ERROR(HOST\INSTANCE):
+# Line 1: ..." (hence no parentheses) and an exec method's "WMIEXEC: Could not retrieve output
+# file" (hence no `<METHOD>EXEC:`). Each added a phantom account to auth_failed, 41 times over
+# the bench references.
+_AUTH_CRED_RE = re.compile(r"^(?![A-Z]+EXEC:)[^:\s()]+:")
 # A Schannel (certificate) LDAP bind has no secret to print; nxc marks success as
 # `DOMAIN\user from certificate` (optionally ` (Pwn3d!)`). There is no `token:` prefix,
 # so _AUTH_CRED_RE would miss it -- match the certificate form explicitly.
