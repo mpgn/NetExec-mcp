@@ -980,6 +980,15 @@ def register(mcp, get_config, index) -> None:
         arguments = dict(arguments) if isinstance(arguments, dict) else {}
         _accepts = (set(((by_name[name].parameters or {}).get("properties") or {}))
                     if name in by_name else None)
+        # `arguments` nested in `arguments`: no tool takes an `arguments` param, so lift the inner
+        # dict, its entries winning as an explicit `arguments` entry wins over a top-level one.
+        # Left nested, the missing-args answer never broke the loop: 13 calls in 2 runs of the
+        # 2026-11-04 bench reference, both ended at the step limit.
+        nested = (isinstance(arguments.get("arguments"), dict) and _accepts is not None
+                  and "arguments" not in _accepts)
+        if nested:
+            inner = arguments.pop("arguments")
+            arguments = {**arguments, **inner}
         _auth_notes = []
         for _k, _v in (("targets", targets), ("username", username),
                        ("password", password), ("domain", domain),
@@ -1059,6 +1068,9 @@ def register(mcp, get_config, index) -> None:
             # on the inner tool call and again on this nxc_call result -- not here.
             if _auth_notes and isinstance(d, dict):
                 d = {**d, "auth_note": "; ".join(_auth_notes)}
+            if nested and isinstance(d, dict) and "_note" not in d:
+                d = {**d, "_note": ("`arguments` was nested inside `arguments` and was unwrapped. "
+                                    "Next time put the tool's parameters directly in `arguments`.")}
             # If the middleware un-flattened this call, hint the model to nest next time.
             if folded and isinstance(d, dict) and "_note" not in d:
                 return {**d, "_note": (
