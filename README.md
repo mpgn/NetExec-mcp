@@ -39,23 +39,32 @@ On startup the server runs `nxc --version` and refuses to start if NetExec is no
 ```bash
 git clone https://github.com/mpgn/NetExec-mcp && cd NetExec-mcp
 uv sync
-NXC_SCOPE=10.0.0.0/24 uv run netexec-mcp
+NXC_SCOPE=10.0.0.0/24 uv run --no-sync netexec-mcp
 ```
 
-In your agent's config, launch it with `uv` and the arguments `run --directory /path/to/NetExec-mcp netexec-mcp` (see `.mcp.json.example`). If NetExec also runs from a source checkout, keep `--no-sync` in `NXC_COMMAND`: without it, each nxc call re-syncs NetExec's environment under a lock and parallel calls run one after another. Run `uv sync` in the NetExec checkout after each update.
+In your agent's config, launch it with `uv` and the arguments `run --no-sync --directory /path/to/NetExec-mcp netexec-mcp` (see `.mcp.json.example`). With `--no-sync`, uv does not check the environment at each start, so run `uv sync` again after each `git pull`. If NetExec also runs from a source checkout, keep `--no-sync` in `NXC_COMMAND` too: without it, each nxc call re-syncs NetExec's environment under a lock, so parallel calls run one after another and the server starts more slowly. Run `uv sync` in the NetExec checkout after each update.
 
 ## Configure
 
 The server is configured with environment variables, passed by your agent (see below).
 
+<a id="configuration-env-vars"></a>
+
 | Variable | What it does | Default |
 | --- | --- | --- |
-| `NXC_SCOPE` | **Required.** Allowed targets: IPs, CIDRs, ranges or hostnames, comma-separated. | _none_ |
+| `NXC_SCOPE` | **Required.** Allowed targets: IPs, CIDRs, ranges or hostnames, comma-separated. Fail-closed: with no scope, every target is refused. | _none_ |
 | `NXC_MODE` | `suggest`, `recon`, `loot` or `full` (see below). | `recon` |
-| `NXC_AUDIT_LOG` | Path of the audit log file. Strongly recommended. | _none_ |
-| `NXC_COMMAND` | How to launch NetExec, if it is not on your `PATH`. | `nxc` or `netexec` on `PATH` |
-| `NXC_PROTOCOLS` | Restrict the tools to some protocols, e.g. `smb,ldap`. | all 10 protocols |
-| `NXC_PATH` | NetExec home directory (config and workspace databases). | `~/.nxc` |
+| `NXC_AUDIT_LOG` | Audit log, one JSON line per command: run, previewed or refused. Strongly recommended. | _none_ |
+| `NXC_PATH` | NetExec home: `nxc.conf`, workspace databases, logs and retrieved files. Passed on to nxc. Use one per engagement, as an absolute path (see [below](#keep-the-agents-netexec-apart-from-yours)). | `~/.nxc` |
+| `NXC_COMMAND` | How to launch NetExec, parsed like a shell command, e.g. `uv run --no-sync --directory ~/NetExec netexec`. | `nxc` or `netexec` on `PATH` |
+| `NXC_PROTOCOLS` | Protocols to expose, comma-separated, e.g. `smb,ldap`. | all 10 |
+| `NXC_TOOL_MODE` | `dynamic`: the agent sees 5 meta-tools and looks up the others. `static`: every tool is listed up front, which costs tens of thousands of tokens of context; use it only with a large-context model that should skip the lookup. | `dynamic` |
+| `NXC_MODULE_CATALOG` | Where dynamic mode finds the `-M` modules: `static` (the list shipped with the server) or `live` (`nxc <proto> -L` at startup, for custom modules or an nxc newer than the list). The mode gate always reads the installed nxc. | `static` |
+| `NXC_TIMEOUT` | Timeout of one call, in seconds. | `300` |
+| `NXC_MAX_TARGETS` | Maximum targets in one call. | `256` |
+| `NXC_LOG_DIR` | One nxc log file per executed call, with the full raw output even when the agent's view of it is capped. Holds secrets: files are created `0600`. | _none_ |
+| `NXC_WORKSPACE` | Workspace the `workspace_*` readers look in. Read side only: nxc keeps writing to the workspace set in its `nxc.conf`. | `nxc.conf`'s, else `default` |
+| `NXC_DOWNLOADS_DIR` | Where retrieved files land (e.g. `smb_get_file`) when the call gives no absolute path. | `<NXC_PATH>/downloads` |
 
 Each mode includes the previous one:
 
@@ -66,7 +75,30 @@ Each mode includes the previous one:
 | `loot` | + credential collection: SAM, LSA, NTDS, GPP, Kerberoasting, AS-REP roasting. |
 | `full` | + everything else: command execution, uploads, spraying, coercion, exploits. |
 
-Scope and mode are read once at startup. The agent cannot change them; to raise them, edit the config and restart the server. Every setting is listed in the [reference](#configuration-env-vars) below.
+Scope and mode are read once at startup. The agent cannot change them; to raise them, edit the config and restart the server.
+
+### Keep the agent's NetExec apart from yours
+
+NetExec keeps its settings, its workspace databases (with every credential it finds), its logs and the files it retrieves in one home folder, `~/.nxc` by default. If the agent shares that folder with you, it can read the credentials of your other engagements, and its results mix with yours. So give the server its own folder with `NXC_PATH`, one per engagement:
+
+```bash
+mkdir -p ~/.netexec-mcp/acme
+```
+
+```json
+"env": {
+  "NXC_SCOPE": "10.0.0.0/24",
+  "NXC_PATH": "/home/you/.netexec-mcp/acme",
+  "NXC_AUDIT_LOG": "/home/you/.netexec-mcp/acme/audit.jsonl"
+}
+```
+
+The server passes `NXC_PATH` on to every nxc it runs, so everything the agent's calls produce stays in that folder, while your own `nxc` keeps using `~/.nxc`. To look at what the agent found, run your own tools with the same folder, for example `NXC_PATH=$HOME/.netexec-mcp/acme nxcdb`.
+
+- **Create the folder first, and give its full path.** NetExec fills the folder on its first run, but it cannot create a missing parent folder, and it does not expand `~` in `NXC_PATH` (a JSON config does not either, nor do fish and zsh in `-e NXC_PATH=~/...`). In both cases, the server refuses to start with a message about `NXC_COMMAND`.
+- **`NXC_WORKSPACE` does not separate engagements.** It only changes the workspace the server reads, while nxc keeps writing to the workspace set in its `nxc.conf`.
+
+To choose which NetExec the server runs, set `NXC_COMMAND`. By default, it is the `nxc` (or `netexec`) on your `PATH`; for a source checkout of NetExec, see [From source](#from-source).
 
 ## Plug it into your agent
 
@@ -76,7 +108,8 @@ Scope and mode are read once at startup. The agent cannot change them; to raise 
 claude mcp add netexec \
   -e NXC_SCOPE=10.0.0.0/24 \
   -e NXC_MODE=recon \
-  -e NXC_AUDIT_LOG=~/.netexec-mcp/audit.jsonl \
+  -e NXC_PATH=$HOME/.netexec-mcp/acme \
+  -e NXC_AUDIT_LOG=$HOME/.netexec-mcp/acme/audit.jsonl \
   -- netexec-mcp
 ```
 
@@ -94,7 +127,8 @@ For Cursor, add this to `~/.cursor/mcp.json` (all projects) or `.cursor/mcp.json
       "env": {
         "NXC_SCOPE": "10.0.0.0/24",
         "NXC_MODE": "recon",
-        "NXC_AUDIT_LOG": "~/.netexec-mcp/audit.jsonl"
+        "NXC_PATH": "/home/you/.netexec-mcp/acme",
+        "NXC_AUDIT_LOG": "/home/you/.netexec-mcp/acme/audit.jsonl"
       }
     }
   }
@@ -117,7 +151,8 @@ Add to `opencode.json`, next to your Ollama provider:
       "environment": {
         "NXC_SCOPE": "10.0.0.0/24",
         "NXC_MODE": "recon",
-        "NXC_AUDIT_LOG": "~/.netexec-mcp/audit.jsonl"
+        "NXC_PATH": "/home/you/.netexec-mcp/acme",
+        "NXC_AUDIT_LOG": "/home/you/.netexec-mcp/acme/audit.jsonl"
       }
     }
   }
@@ -131,6 +166,8 @@ Use a model with solid tool calling (Qwen3 14B is a good start) and at least 32k
 Any MCP SDK works. With [Pydantic AI](https://github.com/pydantic/pydantic-ai) (`pip install pydantic-ai`):
 
 ```python
+import os
+
 from fastmcp.client.transports import StdioTransport
 from pydantic_ai import Agent
 from pydantic_ai.mcp import MCPToolset
@@ -139,7 +176,11 @@ netexec = MCPToolset(
     StdioTransport(
         command="netexec-mcp",
         args=[],
-        env={"NXC_SCOPE": "10.0.0.0/24", "NXC_MODE": "recon"},
+        env={
+            "NXC_SCOPE": "10.0.0.0/24",
+            "NXC_MODE": "recon",
+            "NXC_PATH": os.path.expanduser("~/.netexec-mcp/acme"),  # created beforehand
+        },
     ),
     include_instructions=True,  # give the agent the server's instructions (off by default)
 )
@@ -155,7 +196,7 @@ Each action takes about two tool calls (find the tool, then run it). If your age
 
 ## Use it
 
-Ask the agent to "run a NetExec health check": it should answer with your NetExec version. Then give it tasks:
+Ask the agent to "run a NetExec health check": it should answer with your NetExec version and its home folder (`nxc_home`), which should be your `NXC_PATH`. Then give it tasks:
 
 - _"Which hosts in 10.0.0.0/24 don't require SMB signing?"_
 - _"With robin / Summer2026!, which shares can I write to?"_
@@ -164,7 +205,7 @@ Ask the agent to "run a NetExec health check": it should answer with your NetExe
 
 Before you start:
 
-- **One `NXC_PATH` per engagement.** The agent can read credentials stored in NetExec's workspace database, including ones from a previous engagement.
+- **One `NXC_PATH` per engagement.** The agent can read credentials stored in NetExec's workspace database, including ones from a previous engagement (see [Keep the agent's NetExec apart from yours](#keep-the-agents-netexec-apart-from-yours)).
 - **Cloud models see your results.** Usernames, hashes and hostnames are sent to the model provider. Use a local model if the rules of engagement require it.
 - **For authorized testing only.**
 
@@ -174,24 +215,6 @@ Before you start:
 - [You're Building Your MCP Wrong](https://mpgn.fr/youre-building-your-mcp-wrong/): why the dynamic mode exists, with benchmarks.
 
 ## Reference
-
-### Configuration (env vars)
-
-| Variable | What it does | Default |
-| --- | --- | --- |
-| `NXC_SCOPE` | Allowed targets (IPs, CIDRs, ranges, hostnames), comma-separated. Fail-closed: with no scope, every target is refused. | _none_ |
-| `NXC_MODE` | `suggest`, `recon`, `loot` or `full`. | `recon` |
-| `NXC_COMMAND` | How to launch NetExec, parsed like a shell command, e.g. `uv run --no-sync --directory ~/NetExec netexec`. | `nxc` or `netexec` on `PATH` |
-| `NXC_PROTOCOLS` | Protocols to expose, comma-separated. | all 10 |
-| `NXC_TOOL_MODE` | `dynamic`: the agent sees 5 meta-tools and looks up the others. `static`: every tool is listed up front, which costs tens of thousands of tokens of context; use it only with a large-context model that should skip the lookup. | `dynamic` |
-| `NXC_MODULE_CATALOG` | Where dynamic mode finds the `-M` modules: `static` (the list shipped with the server) or `live` (`nxc <proto> -L` at startup, for custom modules or an nxc newer than the list). The mode gate always reads the installed nxc. | `static` |
-| `NXC_TIMEOUT` | Timeout of one call, in seconds. | `300` |
-| `NXC_MAX_TARGETS` | Maximum targets in one call. | `256` |
-| `NXC_AUDIT_LOG` | Audit log, one JSON line per command: run, previewed or refused. | _none_ |
-| `NXC_LOG_DIR` | One nxc log file per executed call, with the full raw output even when the agent's view of it is capped. Holds secrets: files are created `0600`. | _none_ |
-| `NXC_PATH` | NetExec home (`nxc.conf`, workspace databases). Passed on to nxc, so the server reads where nxc writes. Use one per engagement. | `~/.nxc` |
-| `NXC_WORKSPACE` | Workspace the `workspace_*` readers look in. Read side only: nxc keeps writing to the workspace set in its `nxc.conf`. | `nxc.conf`'s, else `default` |
-| `NXC_DOWNLOADS_DIR` | Where retrieved files land (e.g. `smb_get_file`) when the call gives no absolute path. | `<NXC_PATH>/downloads` |
 
 ### Resources
 
