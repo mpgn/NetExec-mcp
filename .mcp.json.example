@@ -1,19 +1,16 @@
 {
   "mcpServers": {
     "netexec": {
-      "command": "netexec-mcp", // with uv "command": "uv"
-      "args": [], // with uv ["run", "--directory", "/path/", "netexec-mcp"],
+      "command": "uv",
+      "args": ["run", "--no-sync", "--directory", "/path/to/NetExec-mcp", "netexec-mcp"],
       "env": {
-        "NXC_COMMAND": "netexec", // with uv "NXC_COMMAND": "uv run --directory /home/bonclay/NetExec netexec",
-        "NXC_PROTOCOLS": "smb,ldap,rdp,winrm,wmi,mssql",
-        "NXC_SCOPE": "10.0.0.0/24,192.168.56.0/24",
-        "NXC_MODE": "recon", // suggest, recon, loot, full
-        "NXC_TIMEOUT": "300",
-        "NXC_MAX_TARGETS": "256",
-        "NXC_AUDIT_LOG": "/home/bonclay/.netexec-mcp/audit.jsonl",
-        "NXC_WORKSPACE": "default",
-        "NXC_TOOL_MODE": "dynamic", // recommended
-        "NXC_PATH": "~/.nxc"
+        "NXC_SCOPE": "10.0.0.0/24",
+        "NXC_MODE": "recon",
+        "NXC_COMMAND": "uv run --no-sync --directory /path/to/NetExec netexec",
+        "NXC_PATH": "/home/you/.netexec-mcp/acme",
+        "NXC_AUDIT_LOG": "/home/you/.netexec-mcp/acme/audit.jsonl",
+        "NXC_PROTOCOLS": "smb,ldap,winrm,mssql,rdp,wmi",
+        "NXC_TOOL_MODE": "dynamic"
       }
     }
   }
