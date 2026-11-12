@@ -157,7 +157,7 @@ def register(mcp, get_config) -> None:
     ) -> dict:
         """Screenshot the RDP desktop after a successful login (`--screenshot`). Read-only.
 
-        `screentime` is how long to wait for the desktop image (`--screentime`, default 10s);
+        `screentime` is how long to wait for the desktop image (`--screentime`, default 5s);
         `res` sets the capture resolution `WIDTHxHEIGHT` (`--res`, default 1024x768). The PNG
         is saved on the nxc host (`~/.nxc/screenshots`); the output reports its path.
         """
