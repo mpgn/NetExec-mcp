@@ -104,6 +104,10 @@ def _auth_label(marker: str, message: str, pwn3d_label: str) -> str | None:
         if q.casefold() == "guest":
             return "guest_fallback"
     if _is_auth_line(message):
+        # SSH prints the label mid-line, before the platform (`user:secret (Pwn3d!) Linux - Shell
+        # access!`), so an admin SSH login was never marked pwned.
+        if re.search(rf"\s\({re.escape(pwn3d_label)}\)(?:\s|$)", message):
+            return "pwned"
         return "valid"
     return None
 
