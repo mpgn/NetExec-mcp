@@ -1,6 +1,6 @@
 {
   "_source": "scripts/gen_module_catalog.py: `nxc <proto> -L` over DEFAULT_PROTOCOLS",
-  "nxc_version": "1.5.1 - Yippie-Ki-Yay - 4d491dd3 - 1224",
+  "nxc_version": "1.5.1 - Yippie-Ki-Yay - 97b31bf1 - 1226",
   "generated": "2026-11-12",
   "protocols": [
     "smb",
