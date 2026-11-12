@@ -19,7 +19,7 @@ from fastmcp.server.middleware import Middleware
 from fastmcp.tools import ToolResult
 from mcp.types import TextContent
 
-from .config import Config, ConfigError, nxc_home
+from .config import Config, ConfigError, nxc_home, pin_nxc_path
 from .executor import _folded_args, parse_version, reset_current_tool, run, set_current_tool
 from .results import model_view
 from . import dynamic, meta, resources
@@ -230,6 +230,7 @@ def _warn_if_surface_too_large(mcp) -> None:
 
 
 def main() -> None:
+    pin_nxc_path()           # before anything reads NXC_PATH: this process and every nxc it starts
     try:
         config = Config.from_env()
     except ConfigError as exc:

@@ -48,6 +48,14 @@ class MissingCredential(GuardrailError):
     """An admin-only action was asked for without any credential: nxc would skip it."""
 
 
+class MissingInputFile(GuardrailError):
+    """A local file nxc must read (ccache, certificate, key, file to upload) does not exist."""
+
+    def __init__(self, message: str, files: list[dict]):
+        super().__init__(message)
+        self.files = files                       # [{"flag", "path"}], for the audit log
+
+
 # --------------------------------------------------------------------------- #
 # Scope
 # --------------------------------------------------------------------------- #

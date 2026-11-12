@@ -29,9 +29,10 @@ from collections import Counter
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 
-from .config import Config
+from .config import Config, input_file, input_file_dirs
 from .guardrails import (
     GuardrailError,
+    MissingInputFile,
     OffensiveBlocked,
     check_credential,
     check_offensive,
@@ -336,6 +337,38 @@ def _new_log_file(log_dir: str | None, tool: str | None) -> str | None:
         return None
 
 
+# --- local input files ---------------------------------------------------------
+# Flags whose next token is a local file nxc reads (for --put-file: the local file, before the
+# remote path). Made absolute here, the one place every tool goes through, see config.input_file.
+_INPUT_FILE_FLAGS = frozenset({"--pfx-cert", "--pfx-base64", "--pem-cert", "--pem-key",
+                               "--key-file", "--mkfile", "--pvk", "--put-file", "--put"})
+
+
+def _absolute_input_files(args: list[str], config: Config) -> list[str]:
+    out = list(args)
+    for i, tok in enumerate(out[:-1]):
+        if tok in _INPUT_FILE_FLAGS:
+            out[i + 1] = input_file(out[i + 1], config)
+    return out
+
+
+def _check_input_files(args: list[str], ccache: str | None, config: Config) -> None:
+    """Refuse the call before nxc runs when a local input file is missing: nxc's own error
+    names a path relative to its cwd, which tells the caller nothing."""
+    files = [(tok, args[i + 1]) for i, tok in enumerate(args[:-1]) if tok in _INPUT_FILE_FLAGS]
+    if ccache:
+        files.append(("ccache", ccache))
+    missing = [(what, path) for what, path in files if not os.path.isfile(path)]
+    if missing:
+        where = ", ".join(str(d) for d in input_file_dirs(config))
+        raise MissingInputFile(
+            "; ".join(f"{what} file not found: {path}" for what, path in missing)
+            + f". A relative path is looked up in {where}; pass an absolute path otherwise. "
+            "Nothing ran.",
+            [{"flag": what, "path": path} for what, path in missing],
+        )
+
+
 # --- auth nudge ---------------------------------------------------------------
 # Flags that supply a secret / alternate auth path; their presence means the caller already
 # has a way to authenticate, so there is nothing to nudge about.
@@ -441,6 +474,8 @@ async def execute(
     cache (nxc has no ccache flag; it is env-only).
     """
     targets = list(targets or [])
+    extra_args = _absolute_input_files(list(extra_args or []), config)
+    ccache = input_file(ccache, config) if ccache else None
     argv = build_command(config.base_command, protocol, targets, extra_args)
     # Read from the tool's own flags, not the argv: a base command can carry its own -x/-X/-u
     # (`python -X utf8`, `python -u`).
@@ -477,6 +512,7 @@ async def execute(
             check_offensive(config.allow_offensive, offensive,
                             dump=dump, allow_loot=config.allow_loot)
             check_credential(_current_tool.get(), protocol, admin_flags, tool_flags)
+            _check_input_files(tool_flags, ccache, config)
     except OffensiveBlocked as exc:
         # Blocked ONLY by the mode gate (not scope/cap): surface the exact command we WOULD
         # run and the mode that permits it, so the auditor can run it by hand or flip
@@ -498,10 +534,13 @@ async def execute(
             f"{lead}\n\nCommand that WOULD run with NXC_MODE={required} (not executed): {resolved}"
         ) from exc
     except GuardrailError as exc:
-        write_audit(
-            config.audit_log,
-            {**audit_base, "outcome": "rejected", "reason": str(exc)},
-        )
+        entry = {**audit_base, "outcome": "rejected", "reason": str(exc)}
+        if isinstance(exc, MissingInputFile):
+            # The path stays out of `reason`: a run's nxc home carries its task name, and the bench
+            # sorts refusals by the words of their reason (t3_scope_guardrail read as a scope one).
+            entry.update(reason="missing input file", rejection="missing_input_file",
+                         missing_files=exc.files)
+        write_audit(config.audit_log, entry)
         raise
 
     # Auth-nudge (pre-run): a named account with no secret would attempt a guest/null bind
@@ -518,7 +557,7 @@ async def execute(
         write_audit(config.audit_log, {**audit_base, "outcome": "dry_run"})
         return ExecOutcome(command=argv, resolved=resolved, dry_run=True)
 
-    env = {"KRB5CCNAME": os.path.expanduser(ccache)} if ccache else None
+    env = {"KRB5CCNAME": ccache} if ccache else None
     # Per-call nxc log (NXC_LOG_DIR): appended to the argv that RUNS only, so `command` /
     # `resolved` stay the command as requested and `log_file` says where the output went.
     # A raw command that already passes its own --log keeps it.

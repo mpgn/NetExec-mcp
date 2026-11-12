@@ -95,7 +95,8 @@ mkdir -p ~/.netexec-mcp/acme
 
 The server passes `NXC_PATH` on to every nxc it runs, so everything the agent's calls produce stays in that folder, while your own `nxc` keeps using `~/.nxc`. To look at what the agent found, run your own tools with the same folder, for example `NXC_PATH=$HOME/.netexec-mcp/acme nxcdb`.
 
-- **Create the folder first, and give its full path.** NetExec fills the folder on its first run, but it cannot create a missing parent folder, and it does not expand `~` in `NXC_PATH` (a JSON config does not either, nor do fish and zsh in `-e NXC_PATH=~/...`). In both cases, the server refuses to start with a message about `NXC_COMMAND`.
+- **The server fixes the path before NetExec reads it.** NetExec does not expand `~` in `NXC_PATH` and cannot create a missing parent folder, so when the server starts, it turns the value into a full path, expands `~` and creates the folder. Without this, a relative path would point to one folder for the server and to another one for NetExec.
+- **Relative file paths start from that folder.** When a call names a file that NetExec reads (a Kerberos ticket cache, a certificate or key, a file to upload), a relative path is looked up in `NXC_PATH`, then in its `output`, `downloads` and `loot` folders, where the tools write their files. If the file is not there, the call is refused before NetExec runs, so use a full path for a file kept anywhere else.
 - **`NXC_WORKSPACE` does not separate engagements.** It only changes the workspace the server reads, while nxc keeps writing to the workspace set in its `nxc.conf`.
 
 To choose which NetExec the server runs, set `NXC_COMMAND`. By default, it is the `nxc` (or `netexec`) on your `PATH`; for a source checkout of NetExec, see [From source](#from-source).
