@@ -8,6 +8,7 @@ The base command is how this server invokes nxc. Resolution order (per PLAN.md):
 
 from __future__ import annotations
 
+import asyncio
 import configparser
 import os
 import re
@@ -193,27 +194,60 @@ def pin_nxc_path() -> str | None:
     return pinned
 
 
-def klist_ccaches(dumps: list[dict], since: float) -> list[dict]:
-    """The ccache files a `--klist-dump` call wrote, as `[{host, principal, logon_id, ccache}]`
-    with an ABSOLUTE `ccache` path. nxc prints only the folder (``results.parse_klist_dumps``)
-    and names each file ``<hostname>_<host>_<date>_<time>_<principal>_<logon id>.ccache`` in a
-    folder shared by every host and every earlier dump, so a file counts when its name carries
-    the host and it was written after ``since`` (the call's start)."""
-    out: list[dict] = []
-    for d in dumps:
-        folder = Path(d["dir"])
-        if not folder.is_dir():
-            continue
-        # nxc's file names turn the ":" of an IPv6 host into "_".
-        name_re = re.compile(rf"_{re.escape(d['host'].replace(':', '_'))}_\d{{4}}-\d{{2}}-\d{{2}}_\d{{6}}_"
-                             r"(?P<principal>.+)_(?P<logon_id>0x[0-9a-fA-F]+)\.ccache$")
-        for f in sorted(folder.iterdir()):
-            m = name_re.search(f.name)
-            # 1 s of slack for filesystems that store whole-second mtimes.
-            if m and f.stat().st_mtime >= since - 1:
-                out.append({"host": d["host"], "principal": m["principal"],
-                            "logon_id": m["logon_id"], "ccache": str(f.resolve())})
+# One --klist-dump at a time in this server: all dumps share one folder, and two at once on a
+# host would each find the other's files between their before/after snapshots.
+KLIST_DUMP_LOCK = asyncio.Lock()
+
+
+def klist_snapshot(folder=None) -> dict[str, tuple[int, int]]:
+    """``{absolute path: (mtime_ns, size)}`` of the ccache files in the klist dump folder
+    (``<nxc_home>/logs/klist`` by default), taken before and after a dump."""
+    folder = Path(folder) if folder else nxc_home() / "logs" / "klist"
+    if not folder.is_dir():
+        return {}
+    out = {}
+    for f in folder.iterdir():
+        if f.suffix == ".ccache" and f.is_file():
+            st = f.stat()
+            out[str(f.resolve())] = (st.st_mtime_ns, st.st_size)
     return out
+
+
+def klist_ccaches(dumps: list[dict], before: dict[str, tuple[int, int]]) -> list[dict]:
+    """The ccache files a ``--klist-dump`` call wrote, as ``[{host, principal, logon_id, ccache}]``
+    with an ABSOLUTE ``ccache`` path. nxc prints only the folder (``results.parse_klist_dumps``)
+    and names each file ``<hostname>_<host>_<date>_<time>_<principal>_<logon id>.ccache`` in a
+    folder shared by every host and every earlier dump, so a file counts when it is new or changed
+    since ``before`` (a :func:`klist_snapshot` taken under :data:`KLIST_DUMP_LOCK`) and its name
+    carries the host."""
+    out: list[dict] = []
+    for host, folder in dict.fromkeys((d["host"], d["dir"]) for d in dumps):
+        # nxc's file names turn the ":" of an IPv6 host into "_".
+        name_re = re.compile(rf"_{re.escape(host.replace(':', '_'))}_\d{{4}}-\d{{2}}-\d{{2}}_\d{{6}}_"
+                             r"(?P<principal>.+)_(?P<logon_id>0x[0-9a-fA-F]+)\.ccache$")
+        for path, stamp in sorted(klist_snapshot(folder).items()):
+            if before.get(path) == stamp:
+                continue                             # there before the call, untouched
+            m = name_re.search(os.path.basename(path))
+            if m:
+                out.append({"host": host, "principal": m["principal"],
+                            "logon_id": m["logon_id"], "ccache": path})
+    return out
+
+
+def klist_count_note(dumps: list[dict], tickets: list[dict]) -> str | None:
+    """A note when a host's "Dumped N TGT(s)" does not match the files found for it: another
+    program wrote into the same NXC_PATH at the same time, or nxc wrote where this server does
+    not look. None when every count matches."""
+    off = []
+    for d in dumps:
+        found = sum(1 for t in tickets if t["host"] == d["host"])
+        if found != d.get("count", found):
+            off.append(f"{d['host']}: nxc dumped {d['count']}, {found} file(s) found")
+    if not off:
+        return None
+    return ("tickets may be incomplete or include another dump's files (" + "; ".join(off)
+            + "). Check the paths before use; keep one NXC_PATH per agent.")
 
 
 def resolve_downloads_dir(cfg) -> Path:

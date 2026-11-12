@@ -740,7 +740,7 @@ _KLIST_SESSION_RE = re.compile(
     r"^\[(?P<index>\d+)\]\s+(?P<account>.+?)\s+(?P<logon_id>0x[0-9a-fA-F]+)\s+"
     r"\(expires (?P<expires>.+?)(?: UTC)?\)$")
 # `--klist-dump`: the closing line names the folder, never the files written in it.
-_KLIST_DUMPED_RE = re.compile(r"Dumped \d+ TGT\(s\) to (?P<dir>.+?)\s*$")
+_KLIST_DUMPED_RE = re.compile(r"Dumped (?P<count>\d+) TGT\(s\) to (?P<dir>.+?)\s*$")
 
 
 def parse_klist_sessions(text: str) -> list[dict]:
@@ -760,13 +760,24 @@ def parse_klist_sessions(text: str) -> list[dict]:
 
 
 def parse_klist_dumps(text: str) -> list[dict]:
-    """`nxc smb|winrm --klist-dump` -> `[{host, dir}]`, the folder each host's ccache files went
-    to. nxc prints the account of each ticket but not its file, see config.klist_ccaches."""
+    """`nxc smb|winrm --klist-dump` -> `[{host, dir, count}]`: the folder each host's ccache files
+    went to and how many. nxc prints the account of each ticket but not its file, see
+    config.klist_ccaches."""
     out: list[dict] = []
     for rec in parse_markers(text):
         if rec.status == "success" and rec.host and (dm := _KLIST_DUMPED_RE.search(rec.message)):
-            out.append({"host": rec.host, "dir": dm["dir"]})
+            out.append({"host": rec.host, "dir": dm["dir"], "count": int(dm["count"])})
     return out
+
+
+def klist_failures(text: str) -> list[dict]:
+    """The `[-]`/`[!]` lines of a klist call that are not login failures, as `[{host, message}]`:
+    "Failed to enumerate Kerberos sessions" (the exec method was blocked), "No Kerberos TGTs
+    found", "No valid TGTs dumped", a session number out of range, an expired or Credential
+    Guard-protected ticket. Without them an empty `sessions`/`tickets` read as "no ticket cached"
+    while klist never ran."""
+    return [{"host": r.host, "message": r.message} for r in parse_markers(text)
+            if r.marker in ("-", "!") and not _is_auth_line(r.message)]
 
 
 def _drop_total_row(rows: list[dict], field: str) -> list[dict]:
