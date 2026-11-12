@@ -132,7 +132,7 @@ def build_index(tools, modules=None) -> list[ToolEntry]:
     `modules` (optional) is a list of nxc -M module records
     ({name, description, category, privilege, protocol}, from meta.collect_module_catalog).
     They join the index tagged kind="module" so find_tool can surface and route to them via
-    nxc_run_module -- without them the whole -M long-tail (raisechild, ticketer, nopac, ...)
+    nxc_run_module -- without them the whole -M long-tail (raisechild, nopac, ...)
     is invisible to discovery.
     """
     entries: list[ToolEntry] = []
@@ -209,6 +209,10 @@ _SYNONYMS = {
     "harvested": ("creds",),
     # DCSync is how secretsdump pulls NTDS over DRSUAPI: the word returned nothing at all.
     "dcsync": ("ntds",),
+    # A golden ticket is forged by the raisechild module (krbtgt key + an extra SID of a trusted
+    # domain); its catalog line says neither "golden" nor "ticket", so the phrase never reached it.
+    "golden ticket": ("raisechild",),
+    "goldenticket": ("raisechild",),
     # fine-grained password policies are PSOs (q_join drops the hyphen of "fine-grained")
     "fine grained": ("pso",),
     "finegrained": ("pso",),
@@ -238,7 +242,19 @@ _TOKEN_SYNONYMS = {
     "tickets": ("klist",),
     "tgt": ("klist",),
     "tgts": ("klist",),
+    # S4U delegation is smb_delegate: "S4U delegation impersonate a user" led with ldap_active_users.
+    "s4u": ("delegate",),
+    # "list processes" tied smb_tasklist with smb_taskkill ("processes" starts with its "process")
+    # and the alphabet chose the one that kills. Plural only: "kill a process" stays on taskkill,
+    # and "kill" points there so "kill processes" does too.
+    "processes": ("tasklist",),
+    "kill": ("taskkill",),
 }
+
+# A ticket to forge or to request is not a ticket cached on a host: those intents get no klist
+# expansion ("golden tickets" and "request service tickets ..." led with smb_klist).
+_NO_KLIST_WORDS = frozenset({"golden", "silver", "diamond", "sapphire", "ticketer",
+                             "service", "s4u", "tgs"})
 
 # Words that state a command-execution intent. Each adds a full-weight literal "exec": as an
 # intent verb "execute" is a stopword, and the 0.4 synonym weight lost to any concrete noun
@@ -274,6 +290,8 @@ def _expand(query_lower: str, tokens: list[str] | None = None) -> list[str]:
             extra.extend(toks)
     for tok in tokens or ():
         extra.extend(_TOKEN_SYNONYMS.get(tok, ()))
+    if any(t in _NO_KLIST_WORDS or t.startswith("forg") for t in tokens or ()):
+        extra = [e for e in extra if e != "klist"]
     return extra
 
 
@@ -570,6 +588,26 @@ def _token_hits(entry: ToolEntry, tokens: list[str]) -> tuple[int, int]:
         hits += int(hit)
         strong += int(strong_hit)
     return hits, strong
+
+
+_FORGE_TICKET_WORDS = frozenset({"ticket", "tickets", "tgt", "tgts", "tgs", "pac"})
+_FORGE_NOTE = (
+    "nxc does not forge a Kerberos ticket on demand. The raisechild module forges a TGT for the "
+    "domain it connects to, with an extra SID of a trusted domain (RID 519): it needs an inbound or "
+    "bidirectional AD trust and DCSync rights, and it reads the krbtgt key itself. smb_delegate "
+    "(store_ticket) saves a service ticket that the KDC issues through S4U, for an account with "
+    "delegation rights. To forge a golden or silver ticket from a key you hold, use impacket's "
+    "ticketer.py outside this MCP.")
+
+
+def _forge_note(tokens: list[str]) -> str | None:
+    """The note for a ticket-forging request: a forging word with a ticket word, or `ticketer`."""
+    tokset = set(tokens)
+    forging = bool(tokset & {"golden", "silver", "diamond", "sapphire"}) or any(
+        t.startswith("forg") for t in tokset)
+    if "ticketer" in tokset or (forging and tokset & _FORGE_TICKET_WORDS):
+        return _FORGE_NOTE
+    return None
 
 
 def _capability_note(tokens: list[str]) -> str | None:
@@ -915,6 +953,10 @@ def register(mcp, get_config, index) -> None:
             out["note"] = (f"no tool matched {query!r}; browse with nxc_catalog() or rephrase "
                            f"to a capability (e.g. 'dump sam', 'kerberoast', 'shares').")
             out["module_hint"] = _MODULE_HINT     # nothing curated matched -> maybe an -M module
+            # the capability notes matter most when nothing matched: they say where to go instead
+            lit, _ = _confidence_tokens(query, protocol)
+            if (cap := _forge_note(lit) or _capability_note(lit)):
+                out["capability_note"] = cap
             return out
         # Hand the model a concrete next action so it commits instead of re-searching --
         # the failure mode that makes small models loop (validated: eliminates loop-deaths,
@@ -950,6 +992,14 @@ def register(mcp, get_config, index) -> None:
         cap_note = _capability_note(tokens)
         if cap_note:
             out["capability_note"] = cap_note
+        forge = _forge_note(tokens)
+        if forge:
+            out["capability_note"] = forge
+            if top.name != "raisechild":
+                # nothing curated forges a ticket: do not sell the nearest match as the answer
+                out["low_confidence"] = True
+                out["hint"] = (f"No tool here forges that ticket: read capability_note before "
+                               f"running {top.name!r}.")
         nq = _norm_query(query)
         if nq in searched:      # same intent searched twice -> nudge harder toward committing
             note = (f"You already searched this. Stop searching -- call "

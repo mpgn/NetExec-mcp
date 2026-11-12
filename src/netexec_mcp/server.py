@@ -278,7 +278,7 @@ def main() -> None:
         # Snapshot the full tool surface BEFORE installing the hiding middleware -- the
         # middleware filters the server's own list_tools too (see dynamic.py).
         full_tools = asyncio.run(mcp.list_tools())
-        # The nxc -M module catalog, so the long-tail modules (raisechild, ticketer, nopac, ...)
+        # The nxc -M module catalog, so the long-tail modules (raisechild, nopac, ...)
         # are searchable via nxc_find_tool and route to nxc_run_module -- otherwise they are
         # invisible to discovery. Default: the list shipped with the MCP (no nxc process at
         # startup); NXC_MODULE_CATALOG=live asks the installed nxc, one -L per enabled protocol.
