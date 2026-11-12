@@ -1,7 +1,7 @@
 {
   "_source": "scripts/gen_module_catalog.py: `nxc <proto> -L` over DEFAULT_PROTOCOLS",
-  "nxc_version": "1.5.1 - Yippie-Ki-Yay - 6965632b - 1174",
-  "generated": "2026-11-01",
+  "nxc_version": "1.5.1 - Yippie-Ki-Yay - 4d491dd3 - 1224",
+  "generated": "2026-11-12",
   "protocols": [
     "smb",
     "ldap",
@@ -85,7 +85,7 @@
     {"category": "CREDENTIAL_DUMPING", "description": "Collect autologon credential stored in the registry", "name": "reg-winlogon", "privilege": "high", "protocol": "smb"},
     {"category": "CREDENTIAL_DUMPING", "description": "Gets security questions and answers for users on computer", "name": "security-questions", "privilege": "high", "protocol": "smb"},
     {"category": "CREDENTIAL_DUMPING", "description": "Downloads screenshots taken by the (new) Snipping Tool.", "name": "snipped", "privilege": "high", "protocol": "smb"},
-    {"category": "CREDENTIAL_DUMPING", "description": "Retrieves the cleartext ssoauthcookie from the local Microsoft Teams database, if teams is open we kill all Teams process", "name": "teams_localdb", "privilege": "high", "protocol": "smb"},
+    {"category": "CREDENTIAL_DUMPING", "description": "Retrieves the cleartext ssoauthcookie from the local Microsoft Teams database", "name": "teams_localdb", "privilege": "high", "protocol": "smb"},
     {"category": "CREDENTIAL_DUMPING", "description": "Extracts credentials from local Veeam SQL Database", "name": "veeam", "privilege": "high", "protocol": "smb"},
     {"category": "CREDENTIAL_DUMPING", "description": "Loot Passwords from VNC server and client configurations", "name": "vnc", "privilege": "high", "protocol": "smb"},
     {"category": "CREDENTIAL_DUMPING", "description": "Dump access token from Token Broker Cache. More info here https://blog.xpnsec.com/wam-bam/. Module by zblurx", "name": "wam", "privilege": "high", "protocol": "smb"},
