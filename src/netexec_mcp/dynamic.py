@@ -230,6 +230,13 @@ _TOKEN_SYNONYMS = {
     "trusts": ("dc", "list"),
     # "sql server" never reached the mssql tools: "sql" is a suffix of the name-part, not a prefix.
     "sql": ("mssql",),
+    # The TGTs cached on a host: "dump kerberos tickets" led with the lsa tools, klist absent.
+    # Whole words, since as substrings "tgt" fired inside krbtgt/getTGT and led "dcsync krbtgt"
+    # with klist. No singular "ticket": that one is a ticket to get or forge (S4U, golden,
+    # service), which klist cannot give.
+    "tickets": ("klist",),
+    "tgt": ("klist",),
+    "tgts": ("klist",),
 }
 
 # Words that state a command-execution intent. Each adds a full-weight literal "exec": as an

