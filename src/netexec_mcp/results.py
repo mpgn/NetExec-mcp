@@ -261,10 +261,11 @@ def build_verdict(records, returncode=None, unparsed_lines=0, stderr=""):
 # nothing, so the call reads as a successful login with an empty result. In the bench reference
 # of 2026-11-04 that "success" came back 50 times, 42 of them mssql_exec as a non-sysadmin, and
 # models reported command output that never came back. The flags of those actions, per
-# protocol, checked against nxc 1.5.1 (6965632b).
+# protocol, checked against nxc 1.5.1 (6965632b), plus the smb klist flags of 4d491dd3.
 ADMIN_ONLY_FLAGS = {
     "smb": frozenset({"-x", "-X", "--sam", "--lsa", "--dpapi", "--sccm", "--qwinsta",
-                      "--tasklist", "--taskkill", "--wmi-query", "--list-snapshots"}),
+                      "--tasklist", "--taskkill", "--wmi-query", "--list-snapshots",
+                      "--klist", "--klist-dump"}),
     "mssql": frozenset({"-x", "-X", "--put-file", "--get-file", "--sam", "--lsa", "--dpapi",
                         "--db-hash"}),
     "wmi": frozenset({"-x", "--get-file", "--sam", "--lsa", "--ntds", "--wmi-query", "--sccm",
@@ -715,6 +716,41 @@ def parse_ldap_gmsa_id(text: str) -> list[dict]:
         if acc:
             rows.append({"host": m["host"], "account": acc["account"], "gmsa_id": acc["id"]})
     return rows
+
+
+# `--klist`: one line per session holding a usable TGT, numbered for `--klist-dump`:
+# `[1] NORTH\eddard.stark  0x16268e1b  (expires 2026-11-12 20:00:00 UTC)` (`N/A` when unknown).
+_KLIST_SESSION_RE = re.compile(
+    r"^\[(?P<index>\d+)\]\s+(?P<account>.+?)\s+(?P<logon_id>0x[0-9a-fA-F]+)\s+"
+    r"\(expires (?P<expires>.+?)(?: UTC)?\)$")
+# `--klist-dump`: the closing line names the folder, never the files written in it.
+_KLIST_DUMPED_RE = re.compile(r"Dumped \d+ TGT\(s\) to (?P<dir>.+?)\s*$")
+
+
+def parse_klist_sessions(text: str) -> list[dict]:
+    """`nxc smb|winrm --klist` -> `[{host, index, account, logon_id, expires}]`. `index` is the
+    number `--klist-dump` takes to dump only that session's TGT."""
+    out: list[dict] = []
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        m = _PREFIX_RE.match(line)
+        if not m:
+            continue
+        sm = _KLIST_SESSION_RE.match(line[m.end():].strip())
+        if sm:
+            out.append({"host": m["host"], "index": int(sm["index"]), "account": sm["account"],
+                        "logon_id": sm["logon_id"], "expires": sm["expires"]})
+    return out
+
+
+def parse_klist_dumps(text: str) -> list[dict]:
+    """`nxc smb|winrm --klist-dump` -> `[{host, dir}]`, the folder each host's ccache files went
+    to. nxc prints the account of each ticket but not its file, see config.klist_ccaches."""
+    out: list[dict] = []
+    for rec in parse_markers(text):
+        if rec.status == "success" and rec.host and (dm := _KLIST_DUMPED_RE.search(rec.message)):
+            out.append({"host": rec.host, "dir": dm["dir"]})
+    return out
 
 
 def _drop_total_row(rows: list[dict], field: str) -> list[dict]:

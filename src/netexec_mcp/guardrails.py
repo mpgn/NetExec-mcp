@@ -296,7 +296,8 @@ _IDENTITY_FLAGS = frozenset({"-u", "-id", "--use-kcache"})
 # still tries them and fails (smb --ntds: "Dumped 0 NTDS hashes"; winrm: no shell to run in).
 _LOGIN_FLAGS = {
     "smb": frozenset({"--ntds"}),
-    "winrm": frozenset({"-x", "-X", "--sam", "--lsa", "--dpapi", "--put-file", "--get-file"}),
+    "winrm": frozenset({"-x", "-X", "--sam", "--lsa", "--dpapi", "--put-file", "--get-file",
+                        "--klist", "--klist-dump"}),
 }
 
 

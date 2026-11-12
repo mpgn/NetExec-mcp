@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import configparser
 import os
+import re
 import shlex
 import shutil
 from dataclasses import dataclass
@@ -113,6 +114,29 @@ def written_file(path: str, base: Path, *, create: bool) -> str:
     if create:
         os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
     return p
+
+
+def klist_ccaches(dumps: list[dict], since: float) -> list[dict]:
+    """The ccache files a `--klist-dump` call wrote, as `[{host, principal, logon_id, ccache}]`
+    with an ABSOLUTE `ccache` path. nxc prints only the folder (``results.parse_klist_dumps``)
+    and names each file ``<hostname>_<host>_<date>_<time>_<principal>_<logon id>.ccache`` in a
+    folder shared by every host and every earlier dump, so a file counts when its name carries
+    the host and it was written after ``since`` (the call's start)."""
+    out: list[dict] = []
+    for d in dumps:
+        folder = Path(d["dir"])
+        if not folder.is_dir():
+            continue
+        # nxc's file names turn the ":" of an IPv6 host into "_".
+        name_re = re.compile(rf"_{re.escape(d['host'].replace(':', '_'))}_\d{{4}}-\d{{2}}-\d{{2}}_\d{{6}}_"
+                             r"(?P<principal>.+)_(?P<logon_id>0x[0-9a-fA-F]+)\.ccache$")
+        for f in sorted(folder.iterdir()):
+            m = name_re.search(f.name)
+            # 1 s of slack for filesystems that store whole-second mtimes.
+            if m and f.stat().st_mtime >= since - 1:
+                out.append({"host": d["host"], "principal": m["principal"],
+                            "logon_id": m["logon_id"], "ccache": str(f.resolve())})
+    return out
 
 
 def resolve_downloads_dir(cfg) -> Path:
