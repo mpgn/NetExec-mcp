@@ -116,6 +116,33 @@ def written_file(path: str, base: Path, *, create: bool) -> str:
     return p
 
 
+def report_download(result: dict, cfg, path: str, was_rel: bool, *, folder: bool = False) -> dict:
+    """Set ``saved_to`` from what is on disk after the call, not from the path that was asked:
+    a call that retrieved nothing used to return ``saved_to`` all the same. In suggest mode
+    nothing ran, so ``saved_to`` is where the file would land."""
+    kind = "folder" if folder else "file"
+    found = os.path.isdir(path) if folder else os.path.isfile(path)
+    if not cfg.dry_run and not found:
+        result["saved_to"] = None
+        result["download_note"] = (f"no {kind} at {path} after the call: nothing was retrieved. "
+                                   "Read records/stdout for the reason.")
+        return result
+    result["saved_to"] = path
+    if not cfg.dry_run and not folder and os.path.getsize(path) == 0:
+        result["download_note"] = (f"{path} is empty. nxc creates the file before it downloads, "
+                                   "so the transfer may have failed: read records/stdout.")
+    if was_rel:
+        result["local_path_note"] = (f"local_path was relative/omitted; {kind} written to {path!r}. "
+                                     "Use that absolute path (saved_to) to read it.")
+    return result
+
+
+def ccache_name(path: str) -> str:
+    """nxc saves --generate-tgt / --generate-st as ``<name>.ccache`` whatever the name given
+    (it strips a trailing .ccache, then adds one), so the path reported must carry it too."""
+    return path if path.endswith(".ccache") else path + ".ccache"
+
+
 def input_file(path: str, cfg) -> str:
     """ABSOLUTE path for a local file nxc READS on a tool's behalf: a ccache, a certificate or key,
     a DPAPI masterkey or backup key file, a file to upload. The reading side of

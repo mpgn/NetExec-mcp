@@ -22,6 +22,7 @@ rather than via the Windows-oriented :func:`auth.build_auth_flags`. Transport kn
 
 from __future__ import annotations
 
+from ..config import download_target, report_download
 from ..executor import execute
 
 
@@ -132,7 +133,7 @@ def register(mcp, get_config) -> None:
     async def ssh_get_file(
         targets: list[str],
         remote_path: str,
-        local_path: str,
+        local_path: str | None = None,
         port: int | None = None,
         ssh_timeout: int | None = None,
         username: str | None = None,
@@ -142,16 +143,21 @@ def register(mcp, get_config) -> None:
     ) -> dict:
         """Download a file from the target over SFTP (`--get-file <remote> <local>`).
 
-        `remote_path` is the path on the target; `local_path` where to save it on the nxc
-        host. LOOT-GATED (NXC_MODE=loot): read-only retrieval (no state change).
+        `remote_path` is the path on the target. `local_path` is OPTIONAL: a relative or omitted
+        value lands under the downloads dir (NXC_DOWNLOADS_DIR, default <nxc_home>/downloads),
+        defaulting to the remote basename; an absolute value is used verbatim. `saved_to` is the
+        absolute path of the file, or None when nothing was retrieved.
+        LOOT-GATED (NXC_MODE=loot): read-only retrieval (no state change).
         """
-        if not remote_path or not local_path:
-            raise ValueError("remote_path and local_path are required for ssh_get_file")
-        return await _ssh_run(
-            get_config, ["--get-file", remote_path, local_path], targets, offensive=True, dump=True,
+        if not remote_path:
+            raise ValueError("remote_path is required for ssh_get_file")
+        abs_path, was_rel = download_target(get_config(), local_path, remote_path)
+        result = await _ssh_run(
+            get_config, ["--get-file", remote_path, abs_path], targets, offensive=True, dump=True,
             port=port, ssh_timeout=ssh_timeout, username=username, password=password,
             key_file=key_file, cred_id=cred_id,
         )
+        return report_download(result, get_config(), abs_path, was_rel)
 
     @mcp.tool()
     async def ssh_put_file(

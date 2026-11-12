@@ -23,6 +23,7 @@ unit-tested, but not validated end-to-end.)*
 
 from __future__ import annotations
 
+from ..config import download_target, report_download
 from ..executor import execute
 
 
@@ -137,23 +138,27 @@ def register(mcp, get_config) -> None:
     async def nfs_get_file(
         targets: list[str],
         remote_file: str,
-        local_file: str,
+        local_file: str | None = None,
         share: str | None = None,
         port: int | None = None,
         nfs_timeout: int | None = None,
     ) -> dict:
         """Download a file from an NFS share (`--get-file <remote> <local>`).
 
-        `remote_file` is the path on the share; `local_file` where to save it on the nxc
-        host. `share` selects the export. LOOT-GATED (NXC_MODE=loot): read-only
-        retrieval (no state change).
+        `remote_file` is the path on the share; `share` selects the export. `local_file` is
+        OPTIONAL: a relative or omitted value lands under the downloads dir (NXC_DOWNLOADS_DIR,
+        default <nxc_home>/downloads), defaulting to the remote basename; an absolute value is
+        used verbatim. `saved_to` is the absolute path of the file, or None when nothing was
+        retrieved. LOOT-GATED (NXC_MODE=loot): read-only retrieval (no state change).
         """
-        if not remote_file or not local_file:
-            raise ValueError("remote_file and local_file are required for nfs_get_file")
-        return await _nfs_run(
-            get_config, ["--get-file", remote_file, local_file], targets, offensive=True, dump=True,
+        if not remote_file:
+            raise ValueError("remote_file is required for nfs_get_file")
+        abs_path, was_rel = download_target(get_config(), local_file, remote_file)
+        result = await _nfs_run(
+            get_config, ["--get-file", remote_file, abs_path], targets, offensive=True, dump=True,
             share=share, port=port, nfs_timeout=nfs_timeout,
         )
+        return report_download(result, get_config(), abs_path, was_rel)
 
     @mcp.tool()
     async def nfs_put_file(
