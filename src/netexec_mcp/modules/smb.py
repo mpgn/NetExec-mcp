@@ -15,14 +15,15 @@ authenticate, or omit them for a null/guest session where the target allows it.
 
 from __future__ import annotations
 
+import contextlib
 import os
-import time
 
 from ..auth import build_auth_flags
-from ..config import (ccache_name, download_target, klist_ccaches, output_dir, report_download,
-                      written_file)
+from ..config import (KLIST_DUMP_LOCK, ccache_name, download_target, klist_ccaches,
+                      klist_count_note, klist_snapshot, output_dir, report_download, written_file)
 from ..executor import execute
 from ..results import (
+    klist_failures,
     parse_dir,
     parse_hosts_file,
     parse_klist_dumps,
@@ -743,6 +744,10 @@ def register(mcp, get_config) -> None:
         parameter of another tool to act as that account. `sessions` takes `index`
         numbers from a listing to dump only those, and implies `dump`.
 
+        `klist_failures` lists klist's own errors per host: an empty `sessions`/`tickets` next to
+        one means klist did not run, not that no ticket is cached. Session numbers are per host
+        and per call: dump right after a listing, one host at a time, and check `principal`.
+
         Runs `klist` on the target through an exec method. CREDENTIAL-DUMPING (NXC_MODE=loot
         or full): read-only, but harvests credential material.
         """
@@ -750,16 +755,21 @@ def register(mcp, get_config) -> None:
             raise ValueError("sessions are the 1-based index numbers of a klist listing")
         dump = dump or bool(sessions)
         flags = ["--klist-dump", *map(str, sessions or [])] if dump else ["--klist"]
-        since = time.time()
-        result = await _loot_run(
-            get_config, flags, targets, username=username, password=password,
-            ntlm_hash=ntlm_hash, domain=domain, local_auth=local_auth,
-            kerberos=kerberos, use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key,
-        )
+        async with KLIST_DUMP_LOCK if dump else contextlib.nullcontext():
+            before = klist_snapshot() if dump else {}
+            result = await _loot_run(
+                get_config, flags, targets, username=username, password=password,
+                ntlm_hash=ntlm_hash, domain=domain, local_auth=local_auth,
+                kerberos=kerberos, use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key,
+            )
         if dump:
-            result["tickets"] = klist_ccaches(parse_klist_dumps(result["stdout"]), since)
+            dumps = parse_klist_dumps(result["stdout"])
+            result["tickets"] = klist_ccaches(dumps, before)
+            if (note := klist_count_note(dumps, result["tickets"])):
+                result["tickets_note"] = note
         else:
             result["sessions"] = parse_klist_sessions(result["stdout"])
+        result["klist_failures"] = klist_failures(result["stdout"])
         return result
 
     # ---- Remote command execution (offensive=True; NXC_MODE=full only) ---- #

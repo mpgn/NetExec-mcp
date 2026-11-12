@@ -24,12 +24,14 @@ deployments.
 
 from __future__ import annotations
 
-import time
+import contextlib
 
 from ..auth import build_auth_flags
-from ..config import download_target, klist_ccaches, report_download
+from ..config import (KLIST_DUMP_LOCK, download_target, klist_ccaches, klist_count_note,
+                      klist_snapshot, report_download)
 from ..executor import execute
-from ..results import parse_klist_dumps, parse_klist_sessions, parse_lsa_secrets, parse_secretsdump
+from ..results import (klist_failures, parse_klist_dumps, parse_klist_sessions, parse_lsa_secrets,
+                       parse_secretsdump)
 
 
 async def _winrm_run(
@@ -313,6 +315,10 @@ def register(mcp, get_config) -> None:
         NTLM-only). `sessions` takes `index` numbers from a listing to dump only those, and
         implies `dump`.
 
+        `klist_failures` lists klist's own errors per host: an empty `sessions`/`tickets` next to
+        one means klist did not run, not that no ticket is cached. Session numbers are per host
+        and per call: dump right after a listing, one host at a time, and check `principal`.
+
         Runs `klist` in a remote shell, so it needs an account that can open one.
         CREDENTIAL-DUMPING (NXC_MODE=loot or full): read-only, but harvests credential material.
         """
@@ -320,17 +326,22 @@ def register(mcp, get_config) -> None:
             raise ValueError("sessions are the 1-based index numbers of a klist listing")
         dump = dump or bool(sessions)
         flags = ["--klist-dump", *map(str, sessions or [])] if dump else ["--klist"]
-        since = time.time()
-        result = await _winrm_run(
-            get_config, flags, targets, offensive=True, dump=True, port=port,
-            check_proto=check_proto, http_timeout=http_timeout, username=username,
-            password=password, ntlm_hash=ntlm_hash, domain=domain, local_auth=local_auth,
-            cred_id=cred_id, laps=laps,
-        )
+        async with KLIST_DUMP_LOCK if dump else contextlib.nullcontext():
+            before = klist_snapshot() if dump else {}
+            result = await _winrm_run(
+                get_config, flags, targets, offensive=True, dump=True, port=port,
+                check_proto=check_proto, http_timeout=http_timeout, username=username,
+                password=password, ntlm_hash=ntlm_hash, domain=domain, local_auth=local_auth,
+                cred_id=cred_id, laps=laps,
+            )
         if dump:
-            result["tickets"] = klist_ccaches(parse_klist_dumps(result["stdout"]), since)
+            dumps = parse_klist_dumps(result["stdout"])
+            result["tickets"] = klist_ccaches(dumps, before)
+            if (note := klist_count_note(dumps, result["tickets"])):
+                result["tickets_note"] = note
         else:
             result["sessions"] = parse_klist_sessions(result["stdout"])
+        result["klist_failures"] = klist_failures(result["stdout"])
         return result
 
     @mcp.tool()
