@@ -116,6 +116,56 @@ def written_file(path: str, base: Path, *, create: bool) -> str:
     return p
 
 
+def input_file(path: str, cfg) -> str:
+    """ABSOLUTE path for a local file nxc READS on a tool's behalf: a ccache, a certificate or key,
+    a DPAPI masterkey or backup key file, a file to upload. The reading side of
+    :func:`written_file` / :func:`download_target`: nxc resolves a relative path against ITS OWN cwd
+    (the NetExec checkout under ``uv run --directory``), so a relative ccache was "File not found"
+    (klist lab test, 2026-11-12). A relative path is looked up where the tools write, so a file one
+    tool wrote reads back by the same name: the nxc home, then its output, downloads and loot dirs
+    (:func:`input_file_dirs`), first match wins; with no match it is taken from the nxc home and the
+    executor refuses the call. Never the MCP's cwd, which depends on how the client launched it."""
+    p = os.path.expanduser(path)
+    if os.path.isabs(p):
+        return p
+    for base in input_file_dirs(cfg):
+        candidate = os.path.abspath(os.path.join(str(base), p))
+        if os.path.isfile(candidate):
+            return candidate
+    return os.path.abspath(os.path.join(str(nxc_home()), p))
+
+
+def input_file_dirs(cfg) -> list[Path]:
+    """Where a relative input path is looked up, in order: the nxc home, then the dirs the tools
+    write into (smb_generate_tgt and store_ticket -> output, the get-file tools -> downloads, the
+    roasting tools -> loot)."""
+    return [nxc_home(), output_dir(), resolve_downloads_dir(cfg), loot_dir()]
+
+
+def pin_nxc_path() -> str | None:
+    """Make NXC_PATH absolute for this process and every nxc it starts; call once at startup.
+
+    nxc reads NXC_PATH with ``normpath`` only (nxc/paths.py): no ``~`` expansion (it made a folder
+    literally named ``~``), ``""`` becomes ``.`` (nxc's own cwd), and a relative value resolves
+    against nxc's cwd while this server resolved it against its own, so the two looked in different
+    places (klist dumps came back empty, input and output paths stayed relative). A blank value is
+    removed, so both fall back to ``~/.nxc``. The folder is created when missing (nxc failed at
+    startup when its parent did not exist). Returns the pinned path, or None when unset."""
+    raw = os.environ.get("NXC_PATH")
+    if raw is None:
+        return None
+    if not raw.strip():
+        del os.environ["NXC_PATH"]
+        return None
+    pinned = os.path.abspath(os.path.expanduser(raw.strip()))
+    os.environ["NXC_PATH"] = pinned
+    try:
+        os.makedirs(pinned, exist_ok=True)
+    except OSError:
+        pass                                   # nxc reports its own error on the first call
+    return pinned
+
+
 def klist_ccaches(dumps: list[dict], since: float) -> list[dict]:
     """The ccache files a `--klist-dump` call wrote, as `[{host, principal, logon_id, ccache}]`
     with an ABSOLUTE `ccache` path. nxc prints only the folder (``results.parse_klist_dumps``)
