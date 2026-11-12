@@ -30,6 +30,7 @@ front.
 from __future__ import annotations
 
 import difflib
+import json
 import re
 from dataclasses import dataclass, field
 
@@ -588,6 +589,39 @@ def _is_list_param(schema) -> bool:
     return any(isinstance(s, dict) and s.get("type") == "array" for s in schema.get("anyOf", []))
 
 
+def _list_item_type(schema) -> str | None:
+    """The JSON-schema type of a list param's items ('integer', 'string', ...), or None."""
+    if not isinstance(schema, dict):
+        return None
+    for s in [schema, *schema.get("anyOf", [])]:
+        if isinstance(s, dict) and s.get("type") == "array":
+            return (s.get("items") or {}).get("type")
+    return None
+
+
+def _coerce_list_arg(value, schema):
+    """A model's near-miss for a list param, made into a list: a bare scalar (`2`, "10.0.0.1"),
+    a JSON list sent as a string ("[1, 2]"), or "1,2" for a list of integers. Anything else is
+    returned unchanged for pydantic to judge."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return [value]
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    if text.startswith("[") and text.endswith("]"):
+        try:
+            parsed = json.loads(text)
+        except ValueError:
+            parsed = None
+        if isinstance(parsed, list):
+            return parsed
+    if _list_item_type(schema) == "integer" and "," in text:
+        return [part.strip() for part in text.split(",") if part.strip()]
+    return [value]
+
+
 def _reformat_validation(err: str, entry: "ToolEntry") -> dict | None:
     """Turn a raw pydantic ValidationError string into the same actionable shape as the
     missing-args path (accepted params + a ready suggested_call), stripping the pydantic URL.
@@ -600,18 +634,23 @@ def _reformat_validation(err: str, entry: "ToolEntry") -> dict | None:
         if ln.strip() and "pydantic.dev" not in ln and "further information" not in ln.lower()
     )
     # pydantic v2 prints the offending field on its own line, then an indented reason.
-    fields = re.findall(
-        r"\n([A-Za-z_]\w*)\n\s+(?:Input should|Field required|Extra inputs|Unexpected keyword)",
+    # A list item is reported as `name.<index>` (sessions.0): keep the param name, once.
+    fields = list(dict.fromkeys(re.findall(
+        r"\n([A-Za-z_]\w*)(?:\.\d+)?\n\s+(?:Input should|Field required|Extra inputs|Unexpected keyword)",
         err,
-    )
+    )))
     unexpected = "unexpected keyword" in low or "extra inputs" in low
     if unexpected and fields:
         hint = (f"remove the unknown parameter(s) {', '.join(fields)} -- not accepted by "
                 f"{entry.name!r}. Send only the params in `signature` (copy suggested_call).")
     elif fields:
-        hint = (f"fix the type of {', '.join(fields)} to match `signature` "
-                f"(a list[str] param like `targets` takes a JSON list, e.g. [\"10.0.0.0/24\"]). "
-                "Copy suggested_call and fill it.")
+        props = (entry.parameters or {}).get("properties", {})
+        typed = {f: _typestr(props[f]) for f in fields if f in props}
+        detail = ", ".join(f"{f}: {t}" for f, t in typed.items())
+        if any(t.startswith("list[") for t in typed.values()):
+            detail += '; a list takes a JSON list, e.g. [1, 2] or ["10.0.0.0/24"]'
+        hint = (f"fix the type of {', '.join(fields)} to match `signature`"
+                + (f" ({detail})" if detail else "") + ". Copy suggested_call and fill it.")
     else:
         hint = "fix the flagged argument to match `signature`, then resend suggested_call."
     return {
@@ -1062,12 +1101,12 @@ def register(mcp, get_config, index) -> None:
                          'remembered between calls, so pass creds again each time.'),
             }
         arg_fail["key"] = None            # args complete -> clear any missing-args streak
-        # Coerce a bare scalar into a 1-element list for list[str] params (targets='x' -> ['x']),
-        # the single most common ValidationError, before it ever reaches pydantic.
+        # Coerce a near-miss into a list for list params (targets='x' -> ['x'], sessions=2 -> [2],
+        # sessions="1,2" -> ["1","2"]), the single most common ValidationError, before pydantic.
         _props = (entry.parameters or {}).get("properties", {})
         for _p, _v in list(arguments.items()):
-            if isinstance(_v, str) and _is_list_param(_props.get(_p)):
-                arguments[_p] = [_v]
+            if _is_list_param(_props.get(_p)):
+                arguments[_p] = _coerce_list_arg(_v, _props.get(_p))
         folded = _folded_args.get()
 
         def _out(d):
