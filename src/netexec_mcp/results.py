@@ -64,10 +64,16 @@ _TRAILING_QUAL_RE = re.compile(r"\(([^)]+)\)\s*$")
 # file" (hence no `<METHOD>EXEC:`). Each added a phantom account to auth_failed, 41 times over
 # the bench references.
 _AUTH_CRED_RE = re.compile(r"^(?![A-Z]+EXEC:)[^:\s()]+:")
-# A Schannel (certificate) LDAP bind has no secret to print; nxc marks success as
-# `DOMAIN\user from certificate` (optionally ` (Pwn3d!)`). There is no `token:` prefix,
-# so _AUTH_CRED_RE would miss it -- match the certificate form explicitly.
-_CERT_AUTH_RE = re.compile(r"\s+from certificate\b", re.IGNORECASE)
+# A login with no secret to print has no `user:` prefix, so _AUTH_CRED_RE misses it. nxc writes
+# `DOMAIN\user from certificate` (Schannel), `DOMAIN\user from ccache` (a Kerberos ticket cache)
+# and `DOMAIN\target through S4U[+U2U] with X [(w/ SPN ...)]` (delegation), on success and
+# failure lines alike, optionally followed by ` (Pwn3d!)` or an error. Only the certificate form
+# was matched, so a non-admin ticket login read as no login at all (klist lab test, 2026-11-12).
+# Anchored, the user before the suffix: nxc before 97b31bf1 printed the mssql failure as
+# `DOMAIN\user: from ccache <error>`, which _AUTH_CRED_RE reads instead.
+_NO_SECRET_AUTH_RE = re.compile(
+    r"^(?P<who>[^\s:()]+)\s+(?:from (?:certificate|ccache)"
+    r"|through S4U(?:\+U2U)? with \S+(?: \(w/ SPN [^)]*\))?)(?=\s|$)", re.IGNORECASE)
 # Terminal failure signatures: the ticket/credential will NOT work on a plain retry (re-forge
 # or change credential). Conservative: NO bare STATUS_ACCESS_DENIED (benign, e.g. a guest that
 # cannot list shares), and NO transient errors -- KRB_AP_ERR_SKEW (fix the clock) and
@@ -76,7 +82,8 @@ _TERMINAL_SIGNATURES = (
     ("auth_error", re.compile(
         r"KDC_ERR_(?:TGT_REVOKED|WRONG_REALM|CLIENT_REVOKED|C_PRINCIPAL_UNKNOWN|PREAUTH_FAILED)"
         r"|WRONG_REALM|STATUS_USER_SESSION_DELETED"
-        r"|STATUS_ACCOUNT_DISABLED|STATUS_PASSWORD_EXPIRED|KRB_AP_ERR_MODIFIED", re.I)),
+        r"|STATUS_ACCOUNT_DISABLED|STATUS_PASSWORD_EXPIRED|KRB_AP_ERR_MODIFIED"
+        r"|KRB_AP_ERR_TKT_EXPIRED", re.I)),
     ("op_error", re.compile(r"rpc_s_access_denied|DRSUAPI.*denied|DCSync.*denied", re.I)),
 )
 # A saved Kerberos ticket (getST/S4U/ticketer): a real success even when sibling hosts fail.
@@ -96,9 +103,14 @@ def _auth_label(marker: str, message: str, pwn3d_label: str) -> str | None:
             return "pwned"
         if q.casefold() == "guest":
             return "guest_fallback"
-    if _AUTH_CRED_RE.match(message) or _CERT_AUTH_RE.search(message):
+    if _is_auth_line(message):
         return "valid"
     return None
+
+
+def _is_auth_line(message: str) -> bool:
+    """A login line: `user:secret ...` or one of the secret-less forms of _NO_SECRET_AUTH_RE."""
+    return bool(_AUTH_CRED_RE.match(message) or _NO_SECRET_AUTH_RE.match(message))
 
 
 def _error_tag(marker: str, message: str) -> tuple[str | None, bool]:
@@ -188,11 +200,11 @@ def parse_markers(text: str, pwn3d_label: str = "Pwn3d!") -> list[StatusRecord]:
 def _user_from_message(message: str) -> str | None:
     """Pull the bare username out of an auth line.
 
-    Handles both the credential form `DOMAIN\\user:secret ...` and the Schannel
-    certificate form `DOMAIN\\user from certificate [...]`.
+    Handles both the credential form `DOMAIN\\user:secret ...` and the secret-less forms
+    `DOMAIN\\user from certificate|ccache [...]` / `DOMAIN\\target through S4U with X [...]`.
     """
-    if _CERT_AUTH_RE.search(message):
-        frag = _CERT_AUTH_RE.split(message, 1)[0].strip()   # DOMAIN\user
+    if (m := _NO_SECRET_AUTH_RE.match(message)):
+        frag = m["who"]                                     # DOMAIN\user
     elif _AUTH_CRED_RE.match(message):
         frag = message.split(":", 1)[0]                     # DOMAIN\user
     else:
@@ -219,7 +231,7 @@ def build_verdict(records, returncode=None, unparsed_lines=0, stderr=""):
             authenticated.append({"host": r.host, "user": _user_from_message(r.message), "pwned": False})
         elif r.auth == "guest_fallback":
             guest_only.append({"host": r.host, "user": _user_from_message(r.message)})
-        if r.marker in ("-", "!") and _AUTH_CRED_RE.match(r.message):
+        if r.marker in ("-", "!") and _is_auth_line(r.message):
             auth_failed.append({"host": r.host, "user": _user_from_message(r.message)})
         if r.terminal:
             errors.append({
