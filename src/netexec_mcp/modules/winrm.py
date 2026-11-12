@@ -27,7 +27,7 @@ from __future__ import annotations
 import time
 
 from ..auth import build_auth_flags
-from ..config import klist_ccaches
+from ..config import download_target, klist_ccaches, report_download
 from ..executor import execute
 from ..results import parse_klist_dumps, parse_klist_sessions, parse_lsa_secrets, parse_secretsdump
 
@@ -337,7 +337,7 @@ def register(mcp, get_config) -> None:
     async def winrm_get_file(
         targets: list[str],
         remote_path: str,
-        local_path: str,
+        local_path: str | None = None,
         port: int | None = None,
         check_proto: str | None = None,
         http_timeout: int | None = None,
@@ -351,17 +351,22 @@ def register(mcp, get_config) -> None:
     ) -> dict:
         """Download a file from the target over WinRM (`--get-file <remote> <local>`).
 
-        `remote_path` is the path on the target; `local_path` where to save it on the nxc
-        host. LOOT-GATED (NXC_MODE=loot): read-only retrieval (no state change).
+        `remote_path` is the path on the target. `local_path` is OPTIONAL: a relative or omitted
+        value lands under the downloads dir (NXC_DOWNLOADS_DIR, default <nxc_home>/downloads),
+        defaulting to the remote basename; an absolute value is used verbatim. `saved_to` is the
+        absolute path of the file, or None when nothing was retrieved.
+        LOOT-GATED (NXC_MODE=loot): read-only retrieval (no state change).
         """
-        if not remote_path or not local_path:
-            raise ValueError("remote_path and local_path are required for winrm_get_file")
-        return await _winrm_run(
-            get_config, ["--get-file", remote_path, local_path], targets, offensive=True, dump=True,
+        if not remote_path:
+            raise ValueError("remote_path is required for winrm_get_file")
+        abs_path, was_rel = download_target(get_config(), local_path, remote_path)
+        result = await _winrm_run(
+            get_config, ["--get-file", remote_path, abs_path], targets, offensive=True, dump=True,
             port=port, check_proto=check_proto, http_timeout=http_timeout,
             username=username, password=password, ntlm_hash=ntlm_hash, domain=domain,
             local_auth=local_auth, cred_id=cred_id, laps=laps,
         )
+        return report_download(result, get_config(), abs_path, was_rel)
 
     @mcp.tool()
     async def winrm_put_file(

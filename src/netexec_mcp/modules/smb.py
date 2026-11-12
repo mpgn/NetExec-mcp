@@ -19,7 +19,8 @@ import os
 import time
 
 from ..auth import build_auth_flags
-from ..config import download_target, klist_ccaches, output_dir, written_file
+from ..config import (ccache_name, download_target, klist_ccaches, output_dir, report_download,
+                      written_file)
 from ..executor import execute
 from ..results import (
     parse_dir,
@@ -915,12 +916,7 @@ def register(mcp, get_config) -> None:
             ntlm_hash=ntlm_hash, domain=domain, local_auth=local_auth,
             kerberos=kerberos, use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key,
         )
-        result["saved_to"] = abs_path
-        if was_rel:
-            result["local_path_note"] = (
-                f"local_path was relative/omitted; file written to {abs_path!r}. "
-                "Use that absolute path (saved_to) to read it.")
-        return result
+        return report_download(result, get_config(), abs_path, was_rel)
 
     @mcp.tool()
     async def smb_put_file(
@@ -1004,11 +1000,7 @@ def register(mcp, get_config) -> None:
             ntlm_hash=ntlm_hash, domain=domain, local_auth=local_auth,
             kerberos=kerberos, use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key,
         )
-        result["saved_to"] = abs_path
-        if was_rel:
-            result["local_path_note"] = (
-                f"local_path was relative/omitted; folder written under {abs_path!r} (saved_to).")
-        return result
+        return report_download(result, get_config(), abs_path, was_rel, folder=True)
 
     # ---- Additional read-only enumeration ---- #
 
@@ -1334,7 +1326,7 @@ def register(mcp, get_config) -> None:
         A relative `output_file` lands under `<nxc_home>/output`; reuse the absolute path
         given in `ccache_file`. Read-only (it requests your own ticket).
         """
-        output_file = written_file(output_file, output_dir(), create=not get_config().dry_run)
+        output_file = written_file(ccache_name(output_file), output_dir(), create=not get_config().dry_run)
         result = await _recon_run(
             get_config, ["--generate-tgt", output_file], targets, username=username,
             password=password, ntlm_hash=ntlm_hash, domain=domain, local_auth=local_auth,
@@ -1506,7 +1498,7 @@ def register(mcp, get_config) -> None:
             flags += ["--spn", spn]
         if store_ticket:
             cfg = get_config()
-            store_ticket = written_file(store_ticket, output_dir(),
+            store_ticket = written_file(ccache_name(store_ticket), output_dir(),
                                         create=not cfg.dry_run and cfg.allow_offensive)
             flags += ["--generate-st", store_ticket]
         result = await _offensive_run(

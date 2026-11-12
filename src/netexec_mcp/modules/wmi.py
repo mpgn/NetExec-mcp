@@ -23,7 +23,7 @@ exposed as a transport knob.
 from __future__ import annotations
 
 from ..auth import build_auth_flags
-from ..config import download_target
+from ..config import download_target, report_download
 from ..executor import execute
 from ..results import parse_lsa_secrets, parse_secretsdump, parse_wmi
 
@@ -395,7 +395,6 @@ def register(mcp, get_config) -> None:
         targets: list[str],
         remote_path: str,
         local_path: str | None = None,
-        append_host: bool = False,
         rpc_timeout: int | None = None,
         username: str | None = None,
         password: str | None = None,
@@ -418,13 +417,13 @@ def register(mcp, get_config) -> None:
 
         `local_path` is OPTIONAL: a relative/omitted value lands under the downloads dir
         (NXC_DOWNLOADS_DIR, default <nxc_home>/downloads), defaulting to the remote basename;
-        the result's `saved_to` is the absolute path. `append_host` appends the host to the
-        filename (`--append-host`). LOOT-GATED (NXC_MODE=loot): read-only retrieval.
+        the result's `saved_to` is the absolute path (None when nothing was retrieved).
+        LOOT-GATED (NXC_MODE=loot): read-only retrieval.
         """
         abs_path, was_rel = download_target(get_config(), local_path, remote_path)
+        # No --append-host: with it nxc ignores the destination and writes `<host>-<remote path>`
+        # into its own working directory, where `saved_to` cannot point.
         flags = ["--get-file", remote_path, abs_path]
-        if append_host:
-            flags.append("--append-host")
         result = await _wmi_run(
             get_config, flags, targets, offensive=True, dump=True,
             rpc_timeout=rpc_timeout, username=username,
@@ -433,11 +432,7 @@ def register(mcp, get_config) -> None:
             aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64,
             pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key,
         )
-        result["saved_to"] = abs_path
-        if was_rel:
-            result["local_path_note"] = (
-                f"local_path was relative/omitted; file written to {abs_path!r} (saved_to).")
-        return result
+        return report_download(result, get_config(), abs_path, was_rel)
 
     # ---- Offensive (NXC_MODE=full only) ---- #
 
