@@ -228,9 +228,9 @@ _SYNONYMS = {
 _TOKEN_SYNONYMS = {
     "ou": ("ous", "organizational"),
     "organizational": ("ous", "ou"),
-    # Domain trusts are listed by ldap_dc_list, but "trust" prefix-matches the name-part
-    # "trusted" of ldap_trusted_for_delegation (a different subject) and led with it. Whole
-    # words only, so "trusted" itself keeps pointing at delegation.
+    # Domain trusts are listed by ldap_dc_list, but "trust" prefix-matched the name-part
+    # "trusted" of the former ldap_trusted_for_delegation (a different subject) and led with
+    # it. Whole words only.
     "trust": ("dc", "list"),
     "trusts": ("dc", "list"),
     # "sql server" never reached the mssql tools: "sql" is a suffix of the name-part, not a prefix.
@@ -356,7 +356,7 @@ def _part_match(tok: str, parts: set[str]) -> bool:
     3-char tool-name stems (rid ~ rids, lsa ~ lsass). Min 3 chars so 1-2 char tokens
     ("a", "id") stay exact-only and don't over-match. A stopword part never matches as the
     prefix of a LONGER query word: it carries no intent, yet "enumeration" hit every `enum`
-    name-part and "force"/"forest" the `for` of ldap_trusted_for_delegation. The other way
+    name-part and "force"/"forest" the `for` of the former ldap_trusted_for_delegation. The other way
     round is kept: "exec" still matches the summary word "Execute" of smb_exec."""
     if tok in parts:
         return True
@@ -710,17 +710,32 @@ def _name_to_query(name: str) -> str:
     return " ".join(p for p in re.split(r"[_\W]+|(?<=[a-z])(?=[A-Z])", name or "") if p)
 
 
+# Tools removed because nxc removed what they ran. A model can still name one, from an older
+# listing or from memory, and is told where it went rather than that it never existed.
+RETIRED_TOOLS = {
+    "ldap_trusted_for_delegation": (
+        "removed: nxc no longer has --trusted-for-delegation (since df95344d). "
+        "ldap_find_delegation lists unconstrained delegation too, except on domain controllers "
+        "and disabled accounts. For every account with the TRUSTED_FOR_DELEGATION flag, those "
+        'included, run ldap_query with ldap_filter="(userAccountControl:1.2.840.113556.1.4.803'
+        ':=524288)" and attributes=["sAMAccountName"].'
+    ),
+}
+
+
 def _capability_suggest(name, index, by_protocol, n: int = 5) -> dict:
     """Suggestions for an invented tool name by CAPABILITY, not name string-distance: route its
     tokens through the same search index find_tool uses, so 'ldap_trusts' -> ldap_query/
     ldap_dc_list and 'smb_enum_cve' -> the vuln tools, which difflib over names never finds.
-    Adds a protocol_note when the name targets a known protocol that is not enabled here."""
+    Adds a protocol_note when the name targets a known protocol that is not enabled here, and
+    a `retired` note when the name is a tool this server no longer has (RETIRED_TOOLS)."""
     q = _name_to_query(name)
     # Rank the tools only: filtering AFTER the limit let -M modules take the slots, and the
     # suggestion list came back short or empty (26 of 149 invented bench names, 2026-10-31).
     tools = [e for e in index if getattr(e, "kind", "tool") == "tool"]
     hits = [e.name for e in search(tools, q, limit=n)]
-    out = {"suggestions": hits}
+    out = {"retired": RETIRED_TOOLS[name]} if name in RETIRED_TOOLS else {}
+    out["suggestions"] = hits
     head = (name or "").split("_", 1)[0].lower()
     # 'nxc'/'workspace' are meta groups, not wire protocols -> never a "protocol not exposed" note.
     if (head in _KNOWN_PREFIXES and head not in ("other", "nxc", "workspace")
@@ -1106,9 +1121,12 @@ def register(mcp, get_config, index) -> None:
             # point of failure with ONE clear next step: search, don't invent -- plus the
             # module path and the auth-check idiom (verifying a credential = running any
             # tool with it; the [+] marker means it authenticated -- there is no 'login' tool).
+            suggest = _capability_suggest(name, index, by_protocol)
+            if "retired" in suggest:          # a real former tool: no "do not invent" lecture
+                return {"error": f"unknown tool {name!r}", **suggest}
             return {
                 "error": f"unknown tool {name!r}",
-                **_capability_suggest(name, index, by_protocol),
+                **suggest,
                 "hint": ('Do not invent tool names. Discover the right tool with '
                          'nxc_find_tool("<capability>") (e.g. "check credentials", "dump ntds", '
                          '"shares"), then nxc_call it. To VERIFY a credential, just run an smb '

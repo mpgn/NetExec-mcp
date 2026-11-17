@@ -312,6 +312,34 @@ def admin_skip_note(flags: list[str], verdict: dict, pwn3d_label: str = "Pwn3d!"
             f"worked, {what} did not run there, and the same account will not change that.")
 
 
+_REMOVED_TAG = "[REMOVED]"
+
+
+def removed_option_note(records, unparsed_lines: int) -> str | None:
+    """The note for an option nxc has retired: nxc keeps it in argparse, answers it with one
+    `[REMOVED] Use ... instead.` line and does nothing, so beside the login line the call read
+    as a success with an empty result (`--trusted-for-delegation` since nxc df95344d). Only
+    after a real login (not a `(Guest)` fallback) and when nothing else came back: no bare
+    output line, no `[+]` line but the login, no failure line but the `[REMOVED]` one and
+    failed logins. Some retired options still run what replaced them and print the line next
+    to their output (`--loggedon-users-filter`, `--filter-shares`), and a raw command may
+    pass a live flag beside the retired one. None otherwise."""
+    removed = next((r.message for r in records if r.message.startswith(_REMOVED_TAG)), None)
+    if removed is None or unparsed_lines:
+        return None
+    if not any(r.auth in ("valid", "pwned") for r in records):
+        return None
+    for r in records:
+        if r.marker == "+" and r.auth is None:
+            return None
+        if (r.marker in ("-", "!") and not r.message.startswith(_REMOVED_TAG)
+                and not _is_auth_line(r.message)):
+            return None
+    removed = removed.rstrip(". ") + "."             # "Arg moved to the ldap protocol" has none
+    return (f"nxc no longer supports this option and ran nothing: {removed} The login worked, "
+            "and the same call will keep returning nothing: use what nxc names instead.")
+
+
 # Keys whose list value is NOT a dedicated-parser payload, so their presence must not trigger
 # the stdout cap: `command` is the argv, `records` is the cross-tool marker summary.
 _TRIM_EXCLUDE = frozenset({"command", "records"})
@@ -551,7 +579,7 @@ def parse_ldap_groups(text: str) -> list[dict]:
 
 def _parse_bare_names(text: str, field: str) -> list[dict]:
     """Parse nxc output that is bare `PROTO HOST PORT NAME <value>` lines with no
-    status marker -- group members, adminCount principals, trusted-for-delegation.
+    status marker -- group members, adminCount principals.
     When a query narrows to a single object nxc drops its `-Header-` table and
     prints one value per line. The banner (`[*]`) / auth (`[+]`) lines carry markers
     and are skipped."""
@@ -593,8 +621,8 @@ def parse_ldap_ou_users(text: str) -> list[dict]:
 
 
 def parse_ldap_principals(text: str) -> list[dict]:
-    """`nxc ldap --admin-count` / `--trusted-for-delegation` -> `{host, name}`
-    (bare principal list, same shape as a narrowed group)."""
+    """`nxc ldap --admin-count` -> `{host, name}` (bare principal list, same shape as a
+    narrowed group)."""
     return _parse_bare_names(text, "name")
 
 
