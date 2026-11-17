@@ -715,7 +715,7 @@ wheels = [
 
 [[package]]
 name = "netexec-mcp"
-version = "1.0.10"
+version = "1.0.11"
 source = { editable = "." }
 dependencies = [
     { name = "fastmcp" },
