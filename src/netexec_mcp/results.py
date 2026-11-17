@@ -426,6 +426,39 @@ def model_view(payload: dict) -> dict:
         return payload
 
 
+# The access labels nxc's --shares prints, comma-joined (nxc/protocols/smb.py).
+_SHARE_PERM = r"(?:READ|WRITE(?: \((?:SUBDIR|ACL)\))?|UNKNOWN \(try '--no-smbv1'\))"
+_SHARE_PERMS_RE = re.compile(rf"{_SHARE_PERM}(?:,{_SHARE_PERM})*(?= |$)")
+
+
+def _share_row(row: str, name_w: int, perm_w: int) -> tuple[str, str, str]:
+    """Split one `--shares` row (from its Share column on) into (share, permissions, remark).
+
+    `name_w` and `perm_w` are the padded widths of the first two columns, read off the
+    header. The name ends at the first space, from the end of its column on, that is
+    followed by permissions nxc prints or by the blank padding of an empty permissions
+    column: where the header says when the name fits, further right when it is longer
+    ("Finance Reports 2024" has a space just where the column ends). When no space fits, the
+    row is a name with neither permissions nor remark, and runs to its end, unless what
+    follows the header's position looks like a label nxc does not print yet (an upper-case
+    word), which keeps that position. Permissions longer than their column (three labels)
+    push the remark the same way."""
+    end = name_w
+    for i in range(name_w, len(row)):
+        if row[i] == " " and (_SHARE_PERMS_RE.match(row, i + 1)
+                              or not row[i + 1:i + 2 + perm_w].strip()):
+            end = i
+            break
+    else:
+        if not re.match(r" [A-Z]{3,}\b", row[name_w:]):
+            end = len(row)
+    field = row[end + 1:]
+    m = _SHARE_PERMS_RE.match(field)
+    perms = m.group(0) if m else field[:perm_w].strip()
+    remark = field[max(perm_w, len(perms)) + 1:].strip()
+    return row[:end].strip(), perms, remark
+
+
 def parse_shares(text: str) -> list[dict]:
     """Parse `nxc smb --shares` output into structured share records.
 
@@ -436,6 +469,11 @@ def parse_shares(text: str) -> list[dict]:
     permissions list for shares the account can't access (e.g. ``ADMIN$``/``C$``).
 
     Each record: ``{host, share, permissions: [...], remark}``.
+
+    nxc pads the columns (``{name:<15} {perms:<22} {remark}``) but does not cut a longer
+    value, which pushes the rest of its row to the right: a share name of 16 characters or
+    more came back cut, its permissions made of the end of its name. See
+    :func:`_share_row`.
     """
     shares: list[dict] = []
     share_off = perm_off = remark_off = None
@@ -467,9 +505,9 @@ def parse_shares(text: str) -> list[dict]:
             share_off = None
             continue
 
-        share = line[share_off:perm_off].strip()
-        perms = line[perm_off:remark_off].strip()
-        remark = line[remark_off:].strip()
+        share, perms, remark = _share_row(
+            line[share_off:], perm_off - share_off - 1, remark_off - perm_off - 1
+        )
         if not share:
             continue
         shares.append(
