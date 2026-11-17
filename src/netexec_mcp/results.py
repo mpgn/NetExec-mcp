@@ -1317,48 +1317,72 @@ def parse_dc_list(text: str) -> list[dict]:
 
 
 # --- LDAP custom query (`ldap_query`) -------------------------------------- #
-# nxc emits one `[+] Response for object: <DN>` marker line per hit, then the
-# requested attributes as plain `<name>    <value>` lines under it:
+# nxc emits one `[+] Response for object: <DN>` marker line per hit, then each attribute as
+# `{name:<20} {value}`, and the further values of a multi-valued attribute on lines of their
+# own, `{'':<20} {value}` (nxc c2cb7521, 2025-03):
 #     LDAP 10.0.0.1 389 DC01  [+] Response for object: CN=x,CN=System,DC=lab
 #     LDAP 10.0.0.1 389 DC01  trustDirection       3
+#     LDAP 10.0.0.1 389 DC01  servicePrincipalName HTTP/web01
+#     LDAP 10.0.0.1 389 DC01                       HTTP/web01.lab
 # A hit with NO attribute lines is the signature of an attribute list nxc could
 # not use (e.g. comma-separated) -- surfacing `attrs: {}` is what makes that
 # visible instead of the model seeing a wall of text and inferring nothing.
 _QUERY_OBJECT_RE = re.compile(r"^Response for object:\s*(?P<dn>.+?)\s*$")
-_QUERY_ATTR_RE = re.compile(r"^(?P<name>[A-Za-z][\w-]*)\s{2,}(?P<value>.*?)\s*$")
+
+
+def _add_value(attrs: dict, name: str, value: str) -> None:
+    """One more value of `name`: a second value turns the attribute into a list."""
+    if name in attrs:
+        existing = attrs[name]
+        attrs[name] = existing + [value] if isinstance(existing, list) else [existing, value]
+    else:
+        attrs[name] = value
 
 
 def parse_ldap_query(text: str) -> list[dict]:
     """Parse `nxc ldap --query <filter> <attributes>` into `{host, dn, attrs}` entries.
 
-    Repeated attributes accumulate into a list (LDAP attributes are multi-valued).
-    Returns `[]` when nothing matched, and entries with an empty `attrs` when the
-    object was found but no attribute came back.
+    A multi-valued attribute comes back as a list, a single value as a string. Returns `[]`
+    when nothing matched, and entries with an empty `attrs` when the object was found but no
+    attribute came back.
+
+    A line is told apart by the column its text starts at, the same for every line of a host:
+    there, it is an attribute, its name then its value; further right, it is one more value of
+    the attribute above. The parser used to want two spaces after the name, so it dropped every
+    name of 20 characters or more (servicePrincipalName, msDS-AllowedToDelegateTo, the msDS-*
+    of a password policy), which nxc follows with one, and every value after the first.
     """
     entries: list[dict] = []
+    # host -> its open entry, the column its lines start at, the attribute last read
+    open_: dict[str, tuple[dict, int, str | None]] = {}
     for raw in (text or "").splitlines():
         line = raw.rstrip()
         prefix = _PREFIX_RE.match(line)
         if not prefix:
             continue
-        payload = line[prefix.end():].strip()
-        if (marker := _MARKER_RE.search(payload)):
+        host, payload = prefix["host"], line[prefix.end():]
+        current = open_.get(host)
+        if current and prefix.end() > current[1]:    # `{'':<20} {value}`: one more value
+            entry, _, last = current
+            if last is not None:
+                _add_value(entry["attrs"], last, payload.strip())
+            continue
+        # A status line starts with its marker; a value may contain one ("CN=[!] Tier0,...").
+        if (marker := _MARKER_RE.match(payload)):
             obj = _QUERY_OBJECT_RE.match(marker["message"].strip())
             if obj:
-                entries.append({"host": prefix["host"], "dn": obj["dn"], "attrs": {}})
+                entry = {"host": host, "dn": obj["dn"], "attrs": {}}
+                entries.append(entry)
+                open_[host] = (entry, prefix.end(), None)
+            elif current:                     # nothing after it continues an attribute
+                open_[host] = (current[0], current[1], None)
             continue
-        if not entries:                       # attribute line before any object header
+        if current is None:                   # attribute line before any object header
             continue
-        attr = _QUERY_ATTR_RE.match(payload)
-        if not attr:
-            continue
-        attrs = entries[-1]["attrs"]
-        name, value = attr["name"], attr["value"]
-        if name in attrs:
-            existing = attrs[name]
-            attrs[name] = existing + [value] if isinstance(existing, list) else [existing, value]
-        else:
-            attrs[name] = value
+        entry, column, _ = current
+        name, _, value = payload.partition(" ")
+        _add_value(entry["attrs"], name, value.strip())
+        open_[host] = (entry, column, name)
     return entries
 
 
