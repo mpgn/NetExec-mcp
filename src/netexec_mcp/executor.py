@@ -50,6 +50,7 @@ from .results import (
     build_verdict,
     count_unmarked_lines,
     parse_markers,
+    removed_option_note,
 )
 
 # Matches CSI / SGR escape sequences such as the colour codes nxc emits.
@@ -578,6 +579,12 @@ async def execute(
         op_error, op_error_note = "admin_required", skip_note
         if not verdict["pwned"]:
             outcome_class = "op_error"
+    # An option nxc has retired: it printed `[REMOVED] ...` and ran nothing, so the login line
+    # alone must not make the call a success.
+    removed_note = removed_option_note(records, unparsed_lines)
+    if removed_note and not op_error:
+        op_error, op_error_note = "removed_option", removed_note
+        outcome_class = "op_error"
     write_audit(
         config.audit_log,
         {

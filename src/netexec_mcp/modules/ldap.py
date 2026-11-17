@@ -541,37 +541,6 @@ def register(mcp, get_config) -> None:
         return result
 
     @mcp.tool()
-    async def ldap_trusted_for_delegation(
-        targets: list[str],
-        username: str | None = None,
-        password: str | None = None,
-        ntlm_hash: str | None = None,
-        domain: str | None = None,
-        kerberos: bool = False,
-        use_kcache: bool = False,
-        cred_id: int | None = None,
-        laps: str | None = None,
-        kdc_host: str | None = None,
-        aes_key: str | None = None,
-        ccache: str | None = None,
-        pfx_cert: str | None = None,
-        pfx_base64: str | None = None,
-        pfx_pass: str | None = None,
-        pem_cert: str | None = None,
-        pem_key: str | None = None,
-        schannel: bool = False,
-        ldap_timeout: int | None = None,
-    ) -> dict:
-        """List principals flagged TRUSTED_FOR_DELEGATION (`--trusted-for-delegation`)."""
-        result = await _ldap_run(
-            get_config, ["--trusted-for-delegation"], targets, username=username,
-            password=password, ntlm_hash=ntlm_hash, domain=domain, kerberos=kerberos,
-            use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, schannel=schannel, ldap_timeout=ldap_timeout,
-        )
-        result["principals"] = parse_ldap_principals(result["stdout"])
-        return result
-
-    @mcp.tool()
     async def ldap_password_not_required(
         targets: list[str],
         username: str | None = None,
