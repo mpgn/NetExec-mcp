@@ -231,4 +231,4 @@ Every command goes through one checkpoint before it runs: the scope allowlist (f
 
 ### nxc version
 
-The tools and their flags are checked against **nxc 1.5.1 "Yippie-Ki-Yay", commit `98e2dc08`** (2026-11-12, build 1228). Check yours with `nxc --version`. NetExec moves fast and sometimes renames or removes flags, so a much newer or older nxc may reject some of them.
+The tools and their flags are checked against **nxc 1.5.1 "Yippie-Ki-Yay", commit `df95344d`** (2026-11-16, build 1239). Check yours with `nxc --version`. NetExec moves fast and sometimes renames or removes flags. An older nxc rejects a flag it does not know yet. A newer nxc usually keeps a flag it has removed and answers it with a `[REMOVED]` line instead of doing the work, and the server reports that answer as an error (`removed_option`) rather than as a result that came back empty.

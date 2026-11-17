@@ -1,7 +1,7 @@
 {
   "_source": "scripts/gen_module_catalog.py: `nxc <proto> -L` over DEFAULT_PROTOCOLS",
-  "nxc_version": "1.5.1 - Yippie-Ki-Yay - 98e2dc08 - 1228",
-  "generated": "2026-11-12",
+  "nxc_version": "1.5.1 - Yippie-Ki-Yay - df95344d - 1239",
+  "generated": "2026-11-16",
   "protocols": [
     "smb",
     "ldap",
