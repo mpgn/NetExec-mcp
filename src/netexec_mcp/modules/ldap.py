@@ -31,6 +31,7 @@ from ..auth import build_auth_flags
 from ..config import loot_dir, written_file
 from ..executor import execute
 from ..results import (
+    DELEGATION_TYPES,
     decode_attributes,
     parse_dc_list,
     parse_domain_sid,
@@ -538,6 +539,17 @@ def register(mcp, get_config) -> None:
             use_kcache=use_kcache, cred_id=cred_id, laps=laps, kdc_host=kdc_host, aes_key=aes_key, ccache=ccache, pfx_cert=pfx_cert, pfx_base64=pfx_base64, pfx_pass=pfx_pass, pem_cert=pem_cert, pem_key=pem_key, schannel=schannel, ldap_timeout=ldap_timeout,
         )
         result["delegations"] = parse_ldap_delegation(result["stdout"])
+        unknown = [d["account"] for d in result["delegations"]
+                   if d["delegation_type"] not in DELEGATION_TYPES]
+        if unknown:
+            # The raw rows themselves: the model view caps stdout once `delegations` is filled.
+            raw = [line.split(None, 4)[-1].rstrip() for line in result["stdout"].splitlines()
+                   if any(f"{a} " in line for a in unknown)][:5]
+            result["warning"] = (
+                f"{len(unknown)} row(s) ({', '.join(unknown)}) carry a delegation type this "
+                "parser does not know, so their columns were cut by position: a value longer "
+                "than its column comes back cut. As nxc printed them: " + " | ".join(raw)
+            )
         return result
 
     @mcp.tool()

@@ -626,48 +626,79 @@ def parse_ldap_principals(text: str) -> list[dict]:
     return _parse_bare_names(text, "name")
 
 
+# The DelegationType values nxc's `--find-delegation` prints (nxc/protocols/ldap.py), longest
+# first so "Constrained" never matches the start of the protocol-transition one.
+DELEGATION_TYPES = ("Constrained w/ Protocol Transition", "Resource-Based Constrained",
+                    "Unconstrained", "Constrained")
+# The DelegationType column is 35 wide since df95344d, so a type is always followed by two
+# spaces or more, or ends the line. Requiring it is what keeps an account named like
+# "Tier 1 Constrained" (a type word as its third word) from being read as account "Tier",
+# type "1", delegation "Constrained".
+_DELEGATION_ROW_RE = re.compile(
+    r"^(?P<account>.+?)\s+(?P<account_type>\S+)\s+(?P<delegation_type>"
+    + "|".join(re.escape(t) for t in DELEGATION_TYPES)
+    + r")(?:\s{2,}(?P<rights>\S.*?))?\s*$"
+)
+_DELEGATION_HEADER_RE = re.compile(r"^AccountName\s+AccountType\s+DelegationType")
+
+
 def parse_ldap_delegation(text: str) -> list[dict]:
     """Parse `nxc ldap --find-delegation` into
-    `[{account, account_type, delegation_type, rights_to: [spn, ...]}]`.
+    `[{host, account, account_type, delegation_type, rights_to: [spn, ...]}]`.
 
-    Output is a fixed-width table with a `----` separator row, e.g.::
+    Each DC prints its own table, a header and a `----` separator row above the rows::
 
-        AccountName  AccountType DelegationType                     DelegationRightsTo
-        ------------ ----------- ---------------------------------- -------------------
-        jon.snow     Person      Constrained w/ Protocol Transition CIFS/winterfell, ...
+        AccountName     AccountType     DelegationType                      DelegationRightsTo
+        --------------- --------------- ----------------------------------- ------------------
+        jon.snow        Person          Constrained w/ Protocol Transition  CIFS/winterfell, ...
 
-    `DelegationType` contains spaces, so columns are sliced by the dash-run
-    positions of the separator row -- never split on whitespace."""
-    rests: list[str] = []
+    Since nxc df95344d the columns have FIXED widths (15/15/35/40) and a longer value is not
+    cut, it pushes the rest of its row to the right: a 16-character account (a 15-character
+    computer name plus `$`) or a gMSA type (`ms-DS-Group-Managed-Service-Account`). Sliced at
+    the separator's positions, such a row came back with its account, its type AND its SPNs
+    cut. So a row is read around its DelegationType, one of the fixed DELEGATION_TYPES followed
+    by two spaces or more; the account may contain spaces (a group in an RBCD row), the type
+    never does. A row that does not read that way is sliced at the separator's positions,
+    which is exact for older nxc (its widths followed the data, so the longest type of a table
+    is followed by one space) and, for a type not in the list, right unless a value is longer
+    than its column."""
+    out: list[dict] = []
+    spans: dict[str, list[tuple[int, int]]] = {}     # host -> its separator's dash runs
     for raw in (text or "").splitlines():
-        if _MARKER_ANYWHERE_RE.search(raw):          # skip [*] banner / [+] auth
+        if _MARKER_ANYWHERE_RE.search(raw):          # skip [*] banner / [+] auth / [-] errors
             continue
         m = _PREFIX_RE.match(raw)
-        if m:
-            rests.append(raw[m.end():])              # keep internal spacing for column slicing
-    header = next((i for i, r in enumerate(rests) if "AccountName" in r), None)
-    if header is None or header + 1 >= len(rests):
-        return []
-    spans = [(mm.start(), mm.end()) for mm in re.finditer(r"-+", rests[header + 1])]
-    if len(spans) < 4:
-        return []
-    out: list[dict] = []
-    for row in rests[header + 2:]:
-        if not row.strip():
+        if not m:
             continue
-
-        def cell(j: int, _row: str = row) -> str:
-            s, e = spans[j]
-            return (_row[s:] if j == len(spans) - 1 else _row[s:e]).strip()
-
-        account = cell(0)
+        host, row = m["host"], raw[m.end():].rstrip()   # keep internal spacing for slicing
+        if not row:
+            continue
+        if _DELEGATION_HEADER_RE.match(row):
+            spans.pop(host, None)
+            continue
+        if set(row) <= {"-", " "}:
+            spans[host] = [(d.start(), d.end()) for d in re.finditer(r"-+", row)]
+            continue
+        if host not in spans:                        # not inside this host's table
+            continue
+        if (r := _DELEGATION_ROW_RE.match(row)):
+            account, account_type = r["account"], r["account_type"]
+            delegation_type, rights = r["delegation_type"], r["rights"] or ""
+        elif len(cols := spans[host]) >= 4:
+            def cell(j: int, _row: str = row, _cols: list = cols) -> str:
+                s, e = _cols[j]
+                return (_row[s:] if j == len(_cols) - 1 else _row[s:e]).strip()
+            account, account_type, delegation_type, rights = cell(0), cell(1), cell(2), cell(3)
+        else:
+            continue
         if not account:
             continue
         out.append({
+            "host": host,
             "account": account,
-            "account_type": cell(1),
-            "delegation_type": cell(2),
-            "rights_to": [x.strip() for x in cell(3).split(",") if x.strip()],
+            "account_type": account_type,
+            "delegation_type": delegation_type,
+            "rights_to": [x.strip() for x in rights.split(",") if x.strip()],
         })
     return out
 
