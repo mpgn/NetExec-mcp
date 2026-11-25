@@ -49,6 +49,35 @@ def _nt_only(h: str) -> str:
     return h
 
 
+def _values_flag(flag: str, values: list[str], what: str) -> list[str]:
+    """One nxc credential flag carrying every value: `-u a b`, never `-u a -u b`.
+
+    nxc declares -u/-p/-H with nargs="+", and argparse keeps only the LAST occurrence of a
+    repeated flag: `-u a -u b -p P1 -p P2` tried `b:P2` alone, so a spray over lists tested one
+    pair (found 2026-11-24; 13 multi-entry smb_spray calls in the bench runs, every one tried
+    only its last user and secret). A value that starts with '-' would be read as an option:
+    alone it goes as `-p=-value`, which argparse reads as one value; inside a list it cannot be
+    passed on the command line, so the call is refused (the value itself is not echoed)."""
+    if not values:
+        return []
+    if len(values) == 1 and values[0].startswith("-"):
+        return [f"{flag}={values[0]}"]
+    if any(v.startswith("-") for v in values):
+        raise AuthError(
+            f"a {what} entry that starts with '-' cannot be sent to nxc together with other "
+            f"{what} values (nxc would read it as an option). Send that {what} in a call of its "
+            "own, or put the list in a wordlist file and pass its path."
+        )
+    return [flag, *values]
+
+
+def secret_flag(flag: str, value: str) -> list[str]:
+    """A single-value option whose value may start with '-' (a password, a pfx passphrase):
+    `[flag, value]`, or `[f"{flag}={value}"]` so nxc's argparse does not read the value as an
+    option ("expected at least one argument")."""
+    return [f"{flag}={value}"] if value.startswith("-") else [flag, value]
+
+
 def build_auth_flags(
     username: "str | list[str] | None" = None,
     password: "str | list[str] | None" = None,
@@ -101,7 +130,7 @@ def build_auth_flags(
         if pfx_base64:
             flags += ["--pfx-base64", pfx_base64]
         if pfx_pass:
-            flags += ["--pfx-pass", pfx_pass]
+            flags += secret_flag("--pfx-pass", pfx_pass)
         if pem_cert:
             flags += ["--pem-cert", pem_cert]
         if pem_key:
@@ -130,18 +159,15 @@ def build_auth_flags(
     else:
         if domain:
             flags += ["-d", domain]
-        for user in usernames:
-            flags += ["-u", user]
-        for pw in passwords:
-            flags += ["-p", pw]
+        flags += _values_flag("-u", usernames, "username")
+        flags += _values_flag("-p", passwords, "password")
         if usernames and not passwords and not hashes and not (kerberos or use_kcache or aes_key or ccache or cert_auth):
             # Username(s) with no secret = empty-password (guest/null) bind. nxc
             # needs an explicit `-p ''`; emitting it here makes guest auth reliable
             # without an agent having to serialise an empty string (which MCP
             # clients routinely mangle). `-u guest` -> `-u guest -p ''`.
             flags += ["-p", ""]
-        for h in hashes:
-            flags += ["-H", _nt_only(h)]
+        flags += _values_flag("-H", [_nt_only(h) for h in hashes], "NTLM hash")
         if local_auth:
             flags.append("--local-auth")
 
@@ -153,14 +179,14 @@ def build_auth_flags(
     if pfx_base64:
         flags += ["--pfx-base64", pfx_base64]
     if pfx_pass:
-        flags += ["--pfx-pass", pfx_pass]
+        flags += secret_flag("--pfx-pass", pfx_pass)
     if pem_cert:
         flags += ["--pem-cert", pem_cert]
     if pem_key:
         flags += ["--pem-key", pem_key]
 
     if laps:
-        flags += ["--laps", laps]
+        flags += secret_flag("--laps", laps)
 
     # Kerberos options. `--aesKey` is itself a Kerberos secret (overpass-the-key;
     # pairs with the aes256/aes128 keys recovered by smb_lsa/smb_ntds) -- nxc treats

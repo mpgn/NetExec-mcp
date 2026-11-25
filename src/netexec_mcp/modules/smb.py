@@ -18,7 +18,7 @@ from __future__ import annotations
 import contextlib
 import os
 
-from ..auth import build_auth_flags
+from ..auth import AuthError, build_auth_flags
 from ..config import (KLIST_DUMP_LOCK, ccache_name, download_target, klist_ccaches,
                       klist_count_note, klist_snapshot, output_dir, report_download, written_file)
 from ..executor import execute
@@ -224,7 +224,10 @@ def register(mcp, get_config) -> None:
         a null session pass no credentials at all.
 
         Includes a structured `hosts` list: `{host, port, hostname, os, name, domain,
-        signing, smbv1, is_dc}` per fingerprinted host. `is_dc` is `True` or `None`,
+        signing, smbv1, is_dc}` per fingerprinted host, plus `null_auth` / `guest_auth`
+        ("True") when nxc printed that the host accepts a null / guest session, and `ntlm`
+        ("False") when it does not offer NTLM; a missing key means nxc did not print the
+        field. `is_dc` is `True` or `None`,
         never `False`: nxc prints its `(DC:...)` tag only when it concluded the host IS a
         domain controller, so `None` means "not tagged" (a member server, or a check nxc
         left inconclusive), not "the parser missed it". Confirmed live on GOAD.
@@ -483,6 +486,16 @@ def register(mcp, get_config) -> None:
         attempts and **can lock out accounts**, so it is refused in recon mode. To
         validate a single known credential without spraying, use `smb_enum_hosts`.
         """
+        secrets = list(passwords or ntlm_hashes or [])
+        if (no_bruteforce and len(secrets) > 1 and len(secrets) != len(usernames)
+                and not any(os.path.isfile(x) for x in [*usernames, *secrets])):
+            # nxc logs "Number provided of usernames and passwords/hashes do not match!", tries
+            # no login and exits 0: the call came back "ok" with nothing tried (2026-11-24).
+            raise AuthError(
+                f"no_bruteforce pairs usernames and secrets one to one: {len(usernames)} usernames "
+                f"but {len(secrets)} passwords/hashes, so nxc would try nothing. Give as many "
+                "secrets as usernames, or a single one, or drop no_bruteforce."
+            )
         auth = build_auth_flags(
             username=usernames, password=passwords, ntlm_hash=ntlm_hashes,
             domain=domain, local_auth=local_auth, kerberos=kerberos, use_kcache=use_kcache,

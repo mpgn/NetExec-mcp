@@ -386,11 +386,21 @@ def _guest_bind_user(argv: list[str]) -> str | None:
     i = 0
     while i < len(argv):
         tok = argv[i]
-        if tok == "-u" and i + 1 < len(argv):
-            users.append(argv[i + 1]); i += 2; continue
-        if tok == "-p" and i + 1 < len(argv):
-            nonempty_pw = nonempty_pw or bool(argv[i + 1])
-            i += 2; continue
+        name, eq, attached = tok.partition("=")
+        if name in ("-u", "-p") and tok.startswith("-") and len(tok) > 1:
+            # auth.build_auth_flags sends one flag with every value (`-u a b -p ''`), or
+            # `-p=-value` for a lone value starting with '-'.
+            if eq:
+                values, i = [attached], i + 1
+            else:
+                values, i = [], i + 1
+                while i < len(argv) and not (argv[i].startswith("-") and len(argv[i]) > 1):
+                    values.append(argv[i]); i += 1
+            if name == "-u":
+                users += values
+            else:
+                nonempty_pw = nonempty_pw or any(values)
+            continue
         if tok in _SECRET_FLAGS:
             saw_secret_flag = True
         i += 1

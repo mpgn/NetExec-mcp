@@ -20,6 +20,7 @@ unit-tested, but not validated end-to-end.)*
 
 from __future__ import annotations
 
+from ..auth import secret_flag
 from ..executor import execute
 
 
@@ -40,7 +41,7 @@ async def _vnc_run(
     if cred_id is not None:
         auth += ["-id", str(cred_id)]
     elif password is not None:
-        auth += ["-p", password]
+        auth += secret_flag("-p", password)      # a password starting with '-' goes as -p=-value
     transport: list[str] = []
     if port is not None:
         transport += ["--port", str(port)]

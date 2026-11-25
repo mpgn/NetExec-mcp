@@ -60,7 +60,8 @@ and the server granted a guest/null session. Do not reuse such a credential.
 
 Read the call's top-level **`verdict`** instead of re-triaging records: it carries
 `authenticated` (with `pwned` per host), `guest_only`, `auth_failed`, `ticket_saved`,
-`any_success` and `empty`, and each record now carries an `auth` tag
+`any_success` and `empty` (an `auth_failed` entry carries the `reason` nxc printed, e.g.
+`STATUS_ACCOUNT_LOCKED_OUT`, when there is one), and a login record carries an `auth` tag
 (`pwned`/`guest_fallback`/`valid`). `outcome_class` summarises the call
 (`success`/`guest_only`/`auth_failed`/`op_error`/`benign_empty`/`ok`) — a call is a
 **success when ANY host authenticates**, even if sibling hosts failed, and a
@@ -99,7 +100,8 @@ _WORKFLOWS = """# Common workflows
 `nxc_run_module` (ENUMERATION → recon; CREDENTIAL_DUMPING → loot; others need full).
 
 **Reading a result**: `records`/`counts` summarise only the lines nxc tagged `[*]`/`[+]`/
-`[-]`/`[!]`. Findings are often printed untagged, so those fields can read as "nothing
+`[-]`/`[!]` (`counts` counts all of them; `records` leaves out a host banner already in the
+call's `hosts` list, and the fields at their default). Findings are often printed untagged, so those fields can read as "nothing
 found" over a `stdout` full of results. `unparsed_lines` is the count of untagged
 non-empty lines: when it is > 0, the summary is incomplete and `stdout` holds the payload.
 Tools that document a structured list (`shares`, `secrets`, `hashes`, …) have already
