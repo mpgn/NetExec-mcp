@@ -404,19 +404,13 @@ def _nxc_cwds(config: Config) -> list[str]:
 
 
 def _target_file(token: str, config: Config) -> str | None:
-    """The absolute path of the file nxc would read for this target, else None. A relative path
-    with a separator is also looked up where the tools write (config.input_file: the nxc home,
-    output, downloads, loot), so `downloads/hosts.txt` reads back what a tool saved. A bare name is
-    looked up in nxc's own cwd only, where nxc looks, so a hostname is never swapped for a saved
-    file of the same name. nxc tests for a file before anything else, an IP-like name included."""
+    """The absolute path of the file nxc would read for this target, else None. Exactly where nxc
+    looks: an absolute path, or a relative one from nxc's working directory. nxc tests for a file
+    before anything else, an IP-like name included."""
     if not token:
         return None
     if os.path.isabs(token):
         return token if os.path.isfile(token) else None
-    if ("/" in token or "\\" in token) and not is_network_token(token):
-        candidate = input_file(token, config)
-        if os.path.isfile(candidate):
-            return candidate
     for d in _nxc_cwds(config):
         candidate = os.path.join(d, token)
         if os.path.isfile(candidate):
@@ -515,10 +509,10 @@ def _check_targets(targets: list[str], files: dict[str, str], config: Config) ->
         paths = [t for t in plain if ("/" in t or "\\" in t) and not is_network_token(t)]
         if not paths:
             raise
-        where = ", ".join(str(d) for d in input_file_dirs(config))
+        where = ", ".join(dict.fromkeys(_nxc_cwds(config)))
         raise ScopeError(
             f"{exc} If {', '.join(paths)} is meant as a targets file, it was not found: a relative "
-            f"path is looked up in {where} and in nxc's working directory; pass an absolute path "
+            f"path is read from nxc's working directory ({where}); pass an absolute path "
             "otherwise."
         ) from exc
     for path, (kind, entries) in read.items():
