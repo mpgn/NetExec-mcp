@@ -163,7 +163,8 @@ _SAFETY = """# Safety & guardrails
 Enforced in a single choke point before any command runs:
 
 - **Scope allowlist** (`NXC_SCOPE`) — every target must be in scope. **Fail-closed**:
-  targets with no scope configured are rejected.
+  targets with no scope configured are rejected. A target may be a file listing targets
+  (one per line, or an nmap XML export): every entry in it is checked.
 - **Mode gating** (`NXC_MODE`) — credential dumping needs `loot`; state-changing
   actions (exec/write/spray/exploit) need `full`; both refused in `recon`.
 - **Target cap** (`NXC_MAX_TARGETS`) and per-call **timeout** (`NXC_TIMEOUT`).
