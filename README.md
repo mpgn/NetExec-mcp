@@ -52,7 +52,7 @@ The server is configured with environment variables, passed by your agent (see b
 
 | Variable | What it does | Default |
 | --- | --- | --- |
-| `NXC_SCOPE` | **Required.** Allowed targets: IPs, CIDRs, ranges or hostnames, comma-separated. Fail-closed: with no scope, every target is refused. | _none_ |
+| `NXC_SCOPE` | **Required.** Allowed targets: IPs, CIDRs, ranges or hostnames, comma-separated. Fail-closed: with no scope, every target is refused. A target can also be a file, as with `nxc`: a list with one target per line, or an nmap XML export. The server reads the file and checks every entry; one entry out of scope refuses the call. | _none_ |
 | `NXC_MODE` | `suggest`, `recon`, `loot` or `full` (see below). | `recon` |
 | `NXC_AUDIT_LOG` | Audit log, one JSON line per command: run, previewed or refused. Strongly recommended. | _none_ |
 | `NXC_PATH` | NetExec home: `nxc.conf`, workspace databases, logs and retrieved files. Passed on to nxc. Use one per engagement, as an absolute path (see [below](#keep-the-agents-netexec-apart-from-yours)). | `~/.nxc` |

@@ -20,6 +20,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -54,6 +55,10 @@ class MissingInputFile(GuardrailError):
     def __init__(self, message: str, files: list[dict]):
         super().__init__(message)
         self.files = files                       # [{"flag", "path"}], for the audit log
+
+
+class TargetFileError(GuardrailError):
+    """A targets file the server could not read the way nxc reads it."""
 
 
 # --------------------------------------------------------------------------- #
@@ -98,6 +103,20 @@ def _expand_range(token: str):
     return start, end
 
 
+def is_network_token(token: str) -> bool:
+    """True for an IP, a CIDR or an nxc range: a target nxc parses as addresses, not as a name."""
+    t = token.strip()
+    return _as_network(t) is not None or _expand_range(t)[0] is not None
+
+
+_HOSTNAME_RE = re.compile(r"[A-Za-z0-9_.-]+")
+
+
+def is_hostname(token: str) -> bool:
+    """True when the token can be a hostname: letters, digits, '-', '_' and '.' only."""
+    return bool(_HOSTNAME_RE.fullmatch(token))
+
+
 @dataclass
 class Scope:
     networks: list = field(default_factory=list)   # ip_network objects
@@ -139,8 +158,12 @@ def _target_in_scope(target: str, scope: Scope, resolve=None) -> bool:
         # CIDR target must be a subnet of an allowed network
         return any(net.version == n.version and net.subnet_of(n) for n in scope.networks)
 
-    # hostname: an exact match / subdomain of an allowed scope hostname ...
+    # hostname: an exact match / subdomain of an allowed scope hostname ... Only a real hostname:
+    # with a NUL, a space or a control character inside, a crafted entry passed on its suffix while
+    # the resolver read only its head (`127.0.0.7\x00.corp.local` reached 127.0.0.7, 2026-11-25).
     host = t.lower()
+    if not is_hostname(host):
+        return False
     if any(host == e or host.endswith("." + e) for e in scope.hostnames):
         return True
     # ... or it RESOLVES to address(es) that all sit inside an allowed network. `resolve`

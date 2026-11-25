@@ -17,6 +17,7 @@ import asyncio
 import contextlib
 import contextvars
 import ipaddress
+import itertools
 import os
 import re
 import shlex
@@ -34,11 +35,16 @@ from .guardrails import (
     GuardrailError,
     MissingInputFile,
     OffensiveBlocked,
+    ScopeError,
+    TargetFileError,
+    TooManyTargets,
     check_credential,
     check_offensive,
     check_protocol,
     check_scope,
     check_target_cap,
+    is_hostname,
+    is_network_token,
     mode_block_detail,
     parse_scope,
     write_audit,
@@ -370,6 +376,160 @@ def _check_input_files(args: list[str], ccache: str | None, config: Config) -> N
         )
 
 
+# --- target files -------------------------------------------------------------
+# nxc reads a target that names an existing file as a list of targets (nxc/parsers/ip.py,
+# process_targets): an nmap or nessus XML export, told apart by its second line, else one target
+# per line. The scope check used to see the path as a hostname: a targets file was refused (a
+# path does not resolve), unless its name ended with an allowed domain (`servers.corp.local`), and
+# then nothing inside it was checked (2026-11-25). The server now reads the file, checks every
+# entry, and hands nxc the absolute path of the file it checked.
+
+_DIR_FLAGS = ("--directory", "--chdir", "-C")
+
+
+def _nxc_cwds(config: Config) -> list[str]:
+    """Where nxc resolves a relative path: the MCP's cwd, which the subprocess inherits, and any dir
+    the launcher moves it into (`uv run --directory D`, `env -C D` or `--chdir=D`, `poetry -C D`).
+    A launcher that changes dir another way (a container, a wrapper script) is not seen."""
+    dirs = [os.getcwd()]
+    base = config.base_command
+    for i, tok in enumerate(base):
+        name, eq, value = tok.partition("=")
+        if name in _DIR_FLAGS:
+            if eq:
+                dirs.append(value)
+            elif i + 1 < len(base):
+                dirs.append(base[i + 1])
+    return dirs
+
+
+def _target_file(token: str, config: Config) -> str | None:
+    """The absolute path of the file nxc would read for this target, else None. A relative path
+    with a separator is also looked up where the tools write (config.input_file: the nxc home,
+    output, downloads, loot), so `downloads/hosts.txt` reads back what a tool saved. A bare name is
+    looked up in nxc's own cwd only, where nxc looks, so a hostname is never swapped for a saved
+    file of the same name. nxc tests for a file before anything else, an IP-like name included."""
+    if not token:
+        return None
+    if os.path.isabs(token):
+        return token if os.path.isfile(token) else None
+    if ("/" in token or "\\" in token) and not is_network_token(token):
+        candidate = input_file(token, config)
+        if os.path.isfile(candidate):
+            return candidate
+    for d in _nxc_cwds(config):
+        candidate = os.path.join(d, token)
+        if os.path.isfile(candidate):
+            return os.path.abspath(candidate)
+    return None
+
+
+def _resolve_target_files(targets: list[str], config: Config) -> tuple[list[str], dict[str, str]]:
+    """(the targets with each targets file made absolute, {absolute path: the target as given})."""
+    out: list[str] = []
+    files: dict[str, str] = {}
+    for t in targets:
+        path = _target_file(t, config)
+        if path:
+            files[path] = t
+        out.append(path or t)
+    return out, files
+
+
+def _local_name(tag) -> str:
+    """An XML tag without its namespace (`{urn:x}ReportHost` -> `ReportHost`)."""
+    return tag.rpartition("}")[2] if isinstance(tag, str) else ""
+
+
+def _target_file_entries(path: str, limit: int) -> tuple[str, list[tuple[str, str]]]:
+    """(format, [(where, entry)]) of a targets file, read as nxc reads it: an nmap XML export when
+    its second line ends with `nmaprun>`, a nessus one when it starts with `<NessusClientData`
+    (nxc/helpers/misc.py identify_target_file), else one target per stripped line. `where` names
+    the entry in a refusal ("line 3"). A list stops after `limit` + 1 entries: the cap refuses it
+    anyway, and a wordlist passed by mistake is not read whole. For an XML export, every host in
+    the file, matched by local name so a namespace hides none: nxc keeps those with the protocol's
+    port open, a subset of them, so checking them all covers what nxc will reach."""
+    try:
+        with open(path) as fh:           # text mode, default encoding: as nxc opens it
+            first, second = fh.readline(), fh.readline()
+            kind = "list"
+            if second.startswith("<NessusClientData"):
+                kind = "nessus"
+            elif second.endswith("nmaprun>\n"):
+                kind = "nmap"
+            if kind == "list":
+                entries: list[tuple[str, str]] = []
+                for n, line in enumerate(itertools.chain([first, second], fh), 1):
+                    if line.strip():
+                        entries.append((f"line {n}", line.strip()))
+                        if len(entries) > limit:
+                            break
+                return kind, entries
+            text = first + second + fh.read()
+    except (OSError, UnicodeDecodeError) as exc:
+        raise TargetFileError(
+            f"targets file {path} could not be read as text ({exc.__class__.__name__}). Nothing ran."
+        ) from exc
+    from xml.etree import ElementTree
+    try:
+        # From the text already read: one read, and the declared encoding is ignored, as libnmap does.
+        root = ElementTree.fromstring(text)
+    except Exception as exc:
+        raise TargetFileError(
+            f"targets file {path} looks like a {kind} export but could not be parsed as XML "
+            f"({exc.__class__.__name__}: {exc}). Nothing ran."
+        ) from exc
+    if kind == "nmap":
+        hosts = [a.get("addr", "") for h in root.iter() if _local_name(h.tag) == "host"
+                 for a in h if _local_name(a.tag) == "address" and a.get("addrtype") == "ipv4"]
+    else:
+        hosts = [h.get("name", "") for h in root.iter() if _local_name(h.tag) == "ReportHost"]
+    return kind, [(f"{kind} host", h.strip()) for h in hosts if h and h.strip()]
+
+
+def _check_targets(targets: list[str], files: dict[str, str], config: Config) -> list[dict]:
+    """Target cap and scope over what nxc will reach: the targets given, each targets file replaced
+    by its entries (each time it is given). Returns what the audit log records about the files."""
+    read = {path: _target_file_entries(path, config.max_targets) for path in files}
+    counted = [e for t in targets for e in ([x for _, x in read[t][1]] if t in files else [t])]
+    try:
+        check_target_cap(counted, config.max_targets)
+    except TooManyTargets as exc:
+        if not files:
+            raise
+        sizes = ", ".join(f"{files[p]}: {len(read[p][1])}{'+' if len(read[p][1]) > config.max_targets else ''}"
+                          for p in files)
+        raise TooManyTargets(f"{exc} Each entry of a targets file counts as one target ({sizes}).") from exc
+    for path, (kind, entries) in read.items():
+        for where, entry in entries:
+            if not (is_network_token(entry) or is_hostname(entry)):
+                raise TargetFileError(
+                    f"targets file {files[path]} ({kind}): {where} is not an IP, CIDR, range or "
+                    f"hostname: {entry!r}. Fix or remove it. Nothing ran."
+                )
+    scope = parse_scope(config.scope)
+    plain = [t for t in targets if t not in files]
+    try:
+        check_scope(plain, scope, resolve=_resolve_host)
+    except ScopeError as exc:
+        paths = [t for t in plain if ("/" in t or "\\" in t) and not is_network_token(t)]
+        if not paths:
+            raise
+        where = ", ".join(str(d) for d in input_file_dirs(config))
+        raise ScopeError(
+            f"{exc} If {', '.join(paths)} is meant as a targets file, it was not found: a relative "
+            f"path is looked up in {where} and in nxc's working directory; pass an absolute path "
+            "otherwise."
+        ) from exc
+    for path, (kind, entries) in read.items():
+        try:
+            check_scope([e for _, e in entries], scope, resolve=_resolve_host)
+        except ScopeError as exc:
+            raise ScopeError(f"targets file {files[path]} ({kind}): {exc}") from exc
+    return [{"path": path, "given": files[path], "format": kind, "entries": len(entries)}
+            for path, (kind, entries) in read.items()]
+
+
 # --- auth nudge ---------------------------------------------------------------
 # Flags that supply a secret / alternate auth path; their presence means the caller already
 # has a way to authenticate, so there is nothing to nudge about.
@@ -484,7 +644,7 @@ async def execute(
     sets KRB5CCNAME for the subprocess so `--use-kcache` reads that specific ticket
     cache (nxc has no ccache flag; it is env-only).
     """
-    targets = list(targets or [])
+    targets, target_files = _resolve_target_files(list(targets or []), config)
     extra_args = _absolute_input_files(list(extra_args or []), config)
     ccache = input_file(ccache, config) if ccache else None
     argv = build_command(config.base_command, protocol, targets, extra_args)
@@ -514,8 +674,9 @@ async def execute(
     try:
         # Dry-run included: a suggested command must not name a disabled protocol either.
         check_protocol(protocol, config.protocols)
-        check_target_cap(targets, config.max_targets)
-        check_scope(targets, parse_scope(config.scope), resolve=_resolve_host)
+        files_read = _check_targets(targets, target_files, config)
+        if files_read:
+            audit_base["target_files"] = files_read
         # In suggest mode (dry_run) nothing executes, so we still surface the
         # resolved command for an offensive action -- the auditor decides whether
         # to run it. The offensive gate only matters when we would actually run.
@@ -551,6 +712,9 @@ async def execute(
             # sorts refusals by the words of their reason (t3_scope_guardrail read as a scope one).
             entry.update(reason="missing input file", rejection="missing_input_file",
                          missing_files=exc.files)
+        elif isinstance(exc, TargetFileError):
+            # Same as above: the path stays out of `reason`.
+            entry.update(reason="unusable targets file", rejection="target_file")
         write_audit(config.audit_log, entry)
         raise
 
