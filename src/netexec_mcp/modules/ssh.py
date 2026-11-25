@@ -22,6 +22,7 @@ rather than via the Windows-oriented :func:`auth.build_auth_flags`. Transport kn
 
 from __future__ import annotations
 
+from ..auth import secret_flag
 from ..config import download_target, report_download
 from ..executor import execute
 
@@ -33,11 +34,11 @@ def _ssh_auth_flags(username=None, password=None, key_file=None, cred_id=None) -
         return ["-id", str(cred_id)]
     flags: list[str] = []
     if username:
-        flags += ["-u", username]
+        flags += secret_flag("-u", username)
     if key_file:
         flags += ["--key-file", key_file]
     if password is not None:
-        flags += ["-p", password]
+        flags += secret_flag("-p", password)     # a password starting with '-' goes as -p=-value
     return flags
 
 

@@ -16,6 +16,7 @@ a later, optional addition (PLAN.md open question).
 from __future__ import annotations
 
 import re
+from collections import Counter
 from dataclasses import dataclass
 
 # Full nxc result line: PROTO HOST PORT NAME [marker] message
@@ -216,6 +217,10 @@ def _user_from_message(message: str) -> str | None:
     return frag.split("\\", 1)[1] if "\\" in frag else frag
 
 
+# The status code a failed login line ends with (SMB/MSSQL STATUS_*, Kerberos errors).
+_FAIL_REASON_RE = re.compile(r"\b(?:STATUS_[A-Z_]+|KDC_ERR_[A-Z_]+|KRB_AP_ERR_[A-Z_]+)\b")
+
+
 def build_verdict(records, returncode=None, unparsed_lines=0, stderr=""):
     """Derive one authoritative outcome from the parsed records.
 
@@ -236,7 +241,11 @@ def build_verdict(records, returncode=None, unparsed_lines=0, stderr=""):
         elif r.auth == "guest_fallback":
             guest_only.append({"host": r.host, "user": _user_from_message(r.message)})
         if r.marker in ("-", "!") and _is_auth_line(r.message):
-            auth_failed.append({"host": r.host, "user": _user_from_message(r.message)})
+            failed = {"host": r.host, "user": _user_from_message(r.message)}
+            codes = _FAIL_REASON_RE.findall(r.message)
+            if codes:             # e.g. STATUS_ACCOUNT_LOCKED_OUT: was only in records[].message
+                failed["reason"] = codes[-1]     # the last one: a secret may contain STATUS_x
+            auth_failed.append(failed)
         if r.terminal:
             errors.append({
                 "host": r.host, "error_class": r.error_class, "message": r.message,
@@ -399,6 +408,36 @@ def _is_empty_default(value) -> bool:
     return value is None or value is False or value == ""
 
 
+_RECORD_DROP_IF_EMPTY = ("auth", "error_class", "terminal", "hostname")
+
+
+def _view_records(records: list, hosts) -> list:
+    """`records` as the model sees them (2026-11-24): every record was sent whole next to the
+    parsed fields, so smb_enum_hosts came back ~3x the size of nxc's stdout (records were 33% of
+    everything the bench sent to models in November). Drops (1) a host banner record when the
+    parsed `hosts` list already has that host (parse_smb_hosts carries every banner field,
+    null/guest auth and NTLM included: 1,553 banner records of the bench runs rebuilt, 0 field
+    lost), (2) `protocol`/`port` when they are the call's usual pair (a module label such as
+    ENUM_LINKS, or LDAPS on 636, differs and stays), (3) fields at their default. Login lines
+    stay: they carry the secret that worked in a spray. Non-dict records pass through."""
+    pairs = Counter((r.get("protocol"), r.get("port")) for r in records if isinstance(r, dict))
+    usual = pairs.most_common(1)[0][0] if pairs else None
+    banner_hosts = {h.get("host") for h in hosts if isinstance(h, dict)} if isinstance(hosts, list) else set()
+    out = []
+    for r in records:
+        if not isinstance(r, dict):
+            out.append(r)
+            continue
+        if (banner_hosts and r.get("marker") == "*" and r.get("host") in banner_hosts
+                and "(name:" in str(r.get("message", ""))):
+            continue
+        same_pair = (r.get("protocol"), r.get("port")) == usual
+        out.append({k: v for k, v in r.items()
+                    if not (same_pair and k in ("protocol", "port"))
+                    and not (k in _RECORD_DROP_IF_EMPTY and _is_empty_default(v))})
+    return out
+
+
 def model_view(payload: dict) -> dict:
     """The MODEL-FACING form of a tool result dict (applied by the server's view middleware).
 
@@ -418,6 +457,8 @@ def model_view(payload: dict) -> dict:
             if not (k == "command" and "resolved" in out)
             and not (k in _VIEW_DROP_IF_EMPTY and _is_empty_default(v))
         }
+        if isinstance(out.get("records"), list):
+            out["records"] = _view_records(out["records"], out.get("hosts"))
         head = [k for k in _VIEW_HEAD if k in out]
         tail = [k for k in _VIEW_TAIL if k in out]
         edges = set(head) | set(tail)
@@ -476,33 +517,34 @@ def parse_shares(text: str) -> list[dict]:
     :func:`_share_row`.
     """
     shares: list[dict] = []
-    share_off = perm_off = remark_off = None
+    # One table per host: nxc runs hosts in parallel threads, so another host's lines (its
+    # banner, its own table) can land in the middle of this host's table. A single table state
+    # closed it at the first foreign marker line and lost every row after it (2026-11-24: 12 to
+    # 24% of the rows on 100 simulated hosts; 0 lost with a state per host).
+    tables: dict[str, tuple[int, int, int]] = {}
 
     for raw in (text or "").splitlines():
         line = raw.rstrip()
         if not line.strip():
             continue
+        prefix = _PREFIX_RE.match(line)
+        if not prefix:
+            continue  # progress bar, warnings: not a table row, and not the end of one
+        host = prefix["host"]
 
         if "Share" in line and "Permissions" in line and "Remark" in line:
-            share_off = line.index("Share")
-            perm_off = line.index("Permissions")
-            remark_off = line.index("Remark")
+            tables[host] = (line.index("Share"), line.index("Permissions"), line.index("Remark"))
             continue
+        if host not in tables:
+            continue  # not inside a shares table of this host
+        share_off, perm_off, remark_off = tables[host]
 
-        if share_off is None:
-            continue  # not inside a shares table yet
-
-        # A marker line (host banner, auth line, "Enumerated shares") ends the table.
+        # A marker line of this host (banner, auth line, "Enumerated shares") ends its table.
         if _MARKER_ANYWHERE_RE.search(line):
-            share_off = None
+            del tables[host]
             continue
         # The separator row (----- ----------- ------).
         if line[share_off:].lstrip().startswith("-"):
-            continue
-
-        prefix = _PREFIX_RE.match(line)
-        if not prefix:
-            share_off = None
             continue
 
         share, perms, remark = _share_row(
@@ -512,7 +554,7 @@ def parse_shares(text: str) -> list[dict]:
             continue
         shares.append(
             {
-                "host": prefix["host"],
+                "host": host,
                 "share": share,
                 "permissions": [p for p in perms.replace(" ", "").split(",") if p],
                 "remark": remark,
@@ -527,31 +569,35 @@ def _parse_columns(text: str, columns: list[tuple[str, str]]) -> list[dict]:
     `columns` is an ordered list of (field_name, header_label). We find the header
     row (the line containing every label), record each label's column offset, then
     slice each following data row positionally -- robust to empty middle columns.
-    Stops a table at a marker line or a row without the PROTO HOST PORT NAME prefix.
+    Each host has its own table: a marker line of that host ends it; lines of other hosts and
+    lines without the PROTO HOST PORT NAME prefix do not.
     """
     fields = [f for f, _ in columns]
     labels = [lbl for _, lbl in columns]
-    offsets: list[int] | None = None
+    # One table per host (see parse_shares): another host's marker line in the middle of this
+    # host's table no longer ends it; a line without the host prefix is skipped, not an end.
+    tables: dict[str, list[int]] = {}
     rows: list[dict] = []
 
     for raw in (text or "").splitlines():
         line = raw.rstrip()
         if not line.strip():
             continue
+        prefix = _PREFIX_RE.match(line)
+        if not prefix:
+            continue
+        host = prefix["host"]
 
         if all(lbl in line for lbl in labels):
-            offsets = [line.index(lbl) for lbl in labels]
+            tables[host] = [line.index(lbl) for lbl in labels]
             continue
+        offsets = tables.get(host)
         if offsets is None:
             continue
         if _MARKER_ANYWHERE_RE.search(line):
-            offsets = None
+            del tables[host]
             continue
         if line[offsets[0]:].lstrip().startswith("-"):  # separator row (----)
-            continue
-        prefix = _PREFIX_RE.match(line)
-        if not prefix:
-            offsets = None
             continue
 
         rec = {"host": prefix["host"]}
@@ -1309,6 +1355,10 @@ def parse_smb_hosts(text: str) -> list[dict]:
             "signing": kv.get("signing"),
             "smbv1": kv.get("smbv1"),
             "is_dc": None if dc_val is None else dc_val.lower() == "true",
+            # printed only when true (or, for NTLM, when false): kept only when printed, so the
+            # banner record can leave the model view without losing them (2026-11-24)
+            **{key: kv[k] for key, k in (("null_auth", "null auth"), ("guest_auth", "guest auth"),
+                                         ("ntlm", "ntlm")) if k in kv},
         })
     return hosts
 

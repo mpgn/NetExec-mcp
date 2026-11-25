@@ -158,6 +158,18 @@ def _target_in_scope(target: str, scope: Scope, resolve=None) -> bool:
     return False
 
 
+SCOPE_HINT_MAX = 12
+
+
+def _scope_hint(raw: list[str], limit: int = SCOPE_HINT_MAX) -> str:
+    """The allowed scope as a refusal shows it: whole up to `limit` entries, else the first
+    `limit` and how many more. Every refusal echoed the whole NXC_SCOPE, so a scope of 250
+    entries put ~3,600 characters into each refusal the model read (2026-11-24)."""
+    if len(raw) <= limit:
+        return ", ".join(raw)
+    return f"{', '.join(raw[:limit])} (+{len(raw) - limit} more)"
+
+
 def check_scope(targets: list[str], scope: Scope, resolve=None) -> None:
     """Raise ScopeError unless every target is inside the allowlist. A hostname target passes
     if it matches an allowed scope hostname OR (via `resolve`) maps to in-scope IP(s)."""
@@ -171,7 +183,7 @@ def check_scope(targets: list[str], scope: Scope, resolve=None) -> None:
     rejected = [t for t in targets if not _target_in_scope(t, scope, resolve)]
     if rejected:
         msg = (f"target(s) out of scope: {', '.join(rejected)} "
-               f"(allowed: {', '.join(scope.raw)})")
+               f"(allowed: {_scope_hint(scope.raw)})")
         if any(_as_network(t) is None and _expand_range(t)[0] is None for t in rejected):
             msg += (". A hostname is allowed only if it resolves to an in-scope IP -- check it "
                     "resolves (e.g. `ping <host>`), or pass the IP directly.")
@@ -316,7 +328,7 @@ def check_credential(tool: str | None, protocol: str, admin_flags: list[str],
     an "ok": 15 times in the bench reference of 2026-11-04 (sam, lsa and ntds over smb, wmi and
     winrm), mostly sent with local_auth=true and no username. `tool_flags` are the tool's
     flags, without the base command (a `python -u` is not a username)."""
-    if any(tok in _IDENTITY_FLAGS for tok in tool_flags):
+    if any(tok.partition("=")[0] in _IDENTITY_FLAGS for tok in tool_flags):   # `-u=-name` too
         return
     login = _LOGIN_FLAGS.get(protocol, frozenset())
     needed = list(dict.fromkeys([*admin_flags, *(tok for tok in tool_flags if tok in login)]))
