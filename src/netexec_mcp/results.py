@@ -470,6 +470,25 @@ def model_view(payload: dict) -> dict:
 # The access labels nxc's --shares prints, comma-joined (nxc/protocols/smb.py).
 _SHARE_PERM = r"(?:READ|WRITE(?: \((?:SUBDIR|ACL)\))?|UNKNOWN \(try '--no-smbv1'\))"
 _SHARE_PERMS_RE = re.compile(rf"{_SHARE_PERM}(?:,{_SHARE_PERM})*(?= |$)")
+# The share types nxc prints in its Type column since 3999b0ab (PR #1531, SMB_SHARE_TYPES in
+# nxc/protocols/smb.py): the base type, UNKNOWN for any other, ",TEMPORARY" for a temporary share.
+_SHARE_TYPE = (r"(?:DISKTREE|PRINTQ|DEVICE|IPC|CLUSTER_FS|CLUSTER_SOFS|CLUSTER_DFS|UNKNOWN)"
+               r"(?:,TEMPORARY)?")
+# The header row of the table, right after the host prefix: `{'Share':<15} {'Permissions':<22}
+# {'Remark'}`, or with a Type column since nxc 3999b0ab. Anchored there and in this order: the
+# words anywhere in the line made a remark ("Permissions are set per Share, see Remark") a header
+# with negative column widths (IndexError, the whole call lost) and a host column holding "Share"
+# (`-k FileShare01.corp.local`) shift every name (independent review, 2026-11-27).
+_SHARES_HEADER_RE = re.compile(
+    r"(?P<share>Share) {2,}(?P<perm>Permissions) {2,}(?:(?P<type>Type) {2,})?(?P<remark>Remark)$")
+# The separator row under it (----- ----------- [----] ------), also when a capped output cut it
+# ("-----           --"), but not a share named "-backup": only dashes and spaces.
+_SHARES_SEPARATOR_RE = re.compile(r"-[- ]*")
+# What follows the name in a row of that table: permissions (or none), Type, Remark.
+_SHARE_TYPED_REST_RE = re.compile(
+    rf"(?P<perms>{_SHARE_PERM}(?:,{_SHARE_PERM})*)?(?P<gap> +)(?P<type>{_SHARE_TYPE})(?= |$)"
+    r" *(?P<remark>.*)$"
+)
 
 
 def _share_row(row: str, name_w: int, perm_w: int) -> tuple[str, str, str]:
@@ -500,6 +519,43 @@ def _share_row(row: str, name_w: int, perm_w: int) -> tuple[str, str, str]:
     return row[:end].strip(), perms, remark
 
 
+def _share_row_typed(row: str, name_w: int, perm_w: int, type_w: int) -> tuple[str, str, str, str]:
+    """Split one row of the `--shares` table with a Type column (nxc 3999b0ab on,
+    ``{name:<15} {perms:<15} {type:<10} {remark}``) into (share, permissions, type, remark).
+
+    nxc prints a type from a closed set, so it anchors the row: the name ends at a space, from
+    the end of its column on, followed by permissions nxc prints (or none) and then a type,
+    separated by exactly the padding nxc puts there (``max(perm_w - len(perms), 0) + 1``
+    spaces, the whole column plus one when there are no permissions). The exact gap keeps a long
+    name ending in a permission word ("Accounting Dept READ", no access) from lending it its
+    last word. A name, permissions or type longer than its column pushes the rest of the row to
+    the right, which this follows. Only the split points that layout allows are tried in each
+    run of spaces (its first space from the name's column on, its last one, and the one that
+    leaves an empty permissions column before the type), so a name made of long runs of spaces
+    stays linear (independent review, 2026-11-27: trying every space was quadratic, 8.9 s for
+    16,000). When nothing fits (a label nxc does not print yet), the header's positions are
+    kept, and the type is then whatever stands in its column, possibly empty."""
+    for run in re.finditer(r" +", row):
+        s, e = run.span()
+        if e <= name_w:
+            continue
+        first = max(s, name_w)
+        for i in sorted({first, e - 1, e - perm_w - 2}):
+            if i < first or i >= e:
+                continue
+            m = _SHARE_TYPED_REST_RE.match(row, i + 1)
+            if not m:
+                continue
+            perms = m["perms"] or ""
+            if len(m["gap"]) != max(perm_w - len(perms), 0) + 1:
+                continue
+            return row[:i].strip(), perms, m["type"], m["remark"].strip()
+    p0 = name_w + 1
+    t0 = p0 + perm_w + 1
+    r0 = t0 + type_w + 1
+    return row[:name_w].strip(), row[p0:t0].strip(), row[t0:r0].strip(), row[r0:].strip()
+
+
 def parse_shares(text: str) -> list[dict]:
     """Parse `nxc smb --shares` output into structured share records.
 
@@ -509,19 +565,23 @@ def parse_shares(text: str) -> list[dict]:
     slice each following data row positionally -- which correctly yields an empty
     permissions list for shares the account can't access (e.g. ``ADMIN$``/``C$``).
 
-    Each record: ``{host, share, permissions: [...], remark}``.
+    Each record: ``{host, share, permissions: [...], remark}``, plus ``type`` (``DISKTREE``,
+    ``IPC``, ``PRINTQ``...) when nxc prints a Type column.
 
     nxc pads the columns (``{name:<15} {perms:<22} {remark}``) but does not cut a longer
     value, which pushes the rest of its row to the right: a share name of 16 characters or
     more came back cut, its permissions made of the end of its name. See
-    :func:`_share_row`.
+    :func:`_share_row`. Since nxc 3999b0ab (PR #1531) the table has a Type column
+    (``{name:<15} {perms:<15} {type:<10} {remark}``): both formats are read, the header says
+    which one (:func:`_share_row_typed`).
     """
     shares: list[dict] = []
     # One table per host: nxc runs hosts in parallel threads, so another host's lines (its
     # banner, its own table) can land in the middle of this host's table. A single table state
     # closed it at the first foreign marker line and lost every row after it (2026-11-24: 12 to
     # 24% of the rows on 100 simulated hosts; 0 lost with a state per host).
-    tables: dict[str, tuple[int, int, int]] = {}
+    # (Share, Permissions, Type or None before nxc 3999b0ab, Remark) offsets.
+    tables: dict[str, tuple[int, int, int | None, int]] = {}
 
     for raw in (text or "").splitlines():
         line = raw.rstrip()
@@ -532,34 +592,47 @@ def parse_shares(text: str) -> list[dict]:
             continue  # progress bar, warnings: not a table row, and not the end of one
         host = prefix["host"]
 
-        if "Share" in line and "Permissions" in line and "Remark" in line:
-            tables[host] = (line.index("Share"), line.index("Permissions"), line.index("Remark"))
+        header = _SHARES_HEADER_RE.match(line, prefix.end())
+        if header:
+            tables[host] = (header.start("share"), header.start("perm"),
+                            header.start("type") if header["type"] else None,
+                            header.start("remark"))
             continue
         if host not in tables:
             continue  # not inside a shares table of this host
-        share_off, perm_off, remark_off = tables[host]
+        share_off, perm_off, type_off, remark_off = tables[host]
 
-        # A marker line of this host (banner, auth line, "Enumerated shares") ends its table.
-        if _MARKER_ANYWHERE_RE.search(line):
+        # A marker line of this host (banner, auth line, "Enumerated shares") ends its table: its
+        # marker follows the prefix. A marker inside a row ("[!] do not delete" as a remark) does
+        # not, or that row and every later one of the host were lost.
+        if _MARKER_ANYWHERE_RE.match(line, prefix.end()):
             del tables[host]
             continue
         # The separator row (----- ----------- ------).
-        if line[share_off:].lstrip().startswith("-"):
+        if _SHARES_SEPARATOR_RE.fullmatch(line[share_off:].strip()):
             continue
 
-        share, perms, remark = _share_row(
-            line[share_off:], perm_off - share_off - 1, remark_off - perm_off - 1
-        )
+        share_type = None
+        if type_off is None:
+            share, perms, remark = _share_row(
+                line[share_off:], perm_off - share_off - 1, remark_off - perm_off - 1
+            )
+        else:
+            share, perms, share_type, remark = _share_row_typed(
+                line[share_off:], perm_off - share_off - 1, type_off - perm_off - 1,
+                remark_off - type_off - 1,
+            )
         if not share:
             continue
-        shares.append(
-            {
-                "host": host,
-                "share": share,
-                "permissions": [p for p in perms.replace(" ", "").split(",") if p],
-                "remark": remark,
-            }
-        )
+        record = {
+            "host": host,
+            "share": share,
+            "permissions": [p for p in perms.replace(" ", "").split(",") if p],
+            "remark": remark,
+        }
+        if type_off is not None:
+            record["type"] = share_type
+        shares.append(record)
     return shares
 
 
