@@ -1,7 +1,7 @@
 {
   "_source": "scripts/gen_module_catalog.py: `nxc <proto> -L` over DEFAULT_PROTOCOLS",
-  "nxc_version": "1.5.1 - Yippie-Ki-Yay - df95344d - 1239",
-  "generated": "2026-11-16",
+  "nxc_version": "1.5.1 - Yippie-Ki-Yay - 3999b0ab - 1294",
+  "generated": "2026-11-27",
   "protocols": [
     "smb",
     "ldap",
@@ -22,6 +22,7 @@
     {"category": "ENUMERATION", "description": "This module helps you to identify hosts that have additional active interfaces", "name": "ioxidresolver", "privilege": "low", "protocol": "smb"},
     {"category": "ENUMERATION", "description": "MS17-010 - EternalBlue - NOT TESTED OUTSIDE LAB ENVIRONMENT", "name": "ms17-010", "privilege": "low", "protocol": "smb"},
     {"category": "ENUMERATION", "description": "Check if the DC is vulnerable to CVE-2021-42278 and CVE-2021-42287 to impersonate DA from standard domain user", "name": "nopac", "privilege": "low", "protocol": "smb"},
+    {"category": "ENUMERATION", "description": "Actively probes NTLM signing enforcement (KB5135557 / ServerRequireNtlmSign)", "name": "ntlmsign", "privilege": "low", "protocol": "smb"},
     {"category": "ENUMERATION", "description": "Check if host vulnerable to printnightmare", "name": "printnightmare", "privilege": "low", "protocol": "smb"},
     {"category": "ENUMERATION", "description": "Check if the server allows a cross-user re-auth swap on an SMB session (used to defeat enforced signing); needs a 2nd account", "name": "reauth_swap", "privilege": "low", "protocol": "smb"},
     {"category": "ENUMERATION", "description": "Check if host vulnerable to CVE-2019-1040", "name": "remove-mic", "privilege": "low", "protocol": "smb"},
@@ -113,7 +114,8 @@
     {"category": "ENUMERATION", "description": "Query all DNS records with the corresponding IP from the domain.", "name": "get-network", "privilege": "low", "protocol": "ldap"},
     {"category": "ENUMERATION", "description": "Get the scriptPath attribute of all users.", "name": "get-scriptpath", "privilege": "low", "protocol": "ldap"},
     {"category": "ENUMERATION", "description": "Query the groups to which a user belongs.", "name": "groupmembership", "privilege": "low", "protocol": "ldap"},
-    {"category": "ENUMERATION", "description": "Retrieves the MachineAccountQuota domain-level attribute and check SeMachineAccountPrivilege (GPO/SYSVOL)", "name": "maq", "privilege": "low", "protocol": "ldap"},
+    {"category": "ENUMERATION", "description": "Retrieves the MachineAccountQuota domain-level attribute, check SeMachineAccountPrivilege (GPO/SYSVOL) and containers where computers can be created", "name": "maq", "privilege": "low", "protocol": "ldap"},
+    {"category": "ENUMERATION", "description": "Actively probes NTLM signing enforcement (KB5135557 / ServerRequireNtlmSign)", "name": "ntlmsign", "privilege": "low", "protocol": "ldap"},
     {"category": "ENUMERATION", "description": "Extract all obsolete operating systems from LDAP", "name": "obsolete", "privilege": "low", "protocol": "ldap"},
     {"category": "ENUMERATION", "description": "Find a SCCM infrastructure in the Active Directory", "name": "sccm", "privilege": "low", "protocol": "ldap"},
     {"category": "ENUMERATION", "description": "Retrieves the different Sites and Subnets of an Active Directory", "name": "subnets", "privilege": "low", "protocol": "ldap"},
