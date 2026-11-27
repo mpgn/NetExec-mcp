@@ -19,11 +19,13 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import sys
 from functools import lru_cache
 from pathlib import Path
 
 from .auth import build_auth_flags
 from .executor import execute, gate_refusal
+from .results import DB_SCHEMA_MISMATCH
 
 # A module line in `nxc <proto> -L` output (after ANSI strip):
 #   [*] enum_av                   Gathers information on ...
@@ -172,6 +174,17 @@ _RECON_CATEGORY = "ENUMERATION"
 # CREDENTIAL_DUMPING modules are offensive but read-only -> permitted from loot mode
 # up (dump=True). PRIVILEGE_ESCALATION / unknown stay full-only (dump=False).
 _DUMP_CATEGORY = "CREDENTIAL_DUMPING"
+class WorkspaceDBMismatch(Exception):
+    """nxc refused a `-L` listing: the protocol's workspace DB does not match the installed nxc
+    (results.schema_mismatch_note). Carries the outcome, whose op_error_note says it to the agent.
+    A listing that comes back empty for that reason must not read as "no modules" nor send
+    nxc_run_module to the conservative gate (a false "needs NXC_MODE=full")."""
+
+    def __init__(self, outcome):
+        super().__init__(outcome.op_error_note)
+        self.outcome = outcome
+
+
 # Session cache of {protocol: {module_name: category}} so we don't re-run `-L` per call.
 _MODULE_CATEGORY_CACHE: dict[str, dict[str, str]] = {}
 
@@ -182,6 +195,8 @@ async def _module_categories(get_config, protocol: str) -> dict[str, str]:
     if cached:
         return cached
     outcome = await execute(get_config(), protocol, [], ["-L"], offensive=False)
+    if getattr(outcome, "op_error", None) == DB_SCHEMA_MISMATCH:
+        raise WorkspaceDBMismatch(outcome)
     cat_map = {m["name"]: m["category"] for m in parse_module_list(outcome.stdout)}
     if cat_map:  # don't cache an empty/failed listing
         _MODULE_CATEGORY_CACHE[protocol] = cat_map
@@ -201,6 +216,9 @@ async def collect_module_catalog(get_config, protocols) -> list[dict]:
             # per-protocol timeout so one hung `-L` can't block server startup forever
             outcome = await asyncio.wait_for(
                 execute(get_config(), proto, [], ["-L"], offensive=False), timeout=30)
+            if getattr(outcome, "op_error", None) == DB_SCHEMA_MISMATCH:
+                print(f"[netexec-mcp] {proto}: no -M module discovered, nxc refused to run: "
+                      f"{outcome.op_error_note}", file=sys.stderr)
             return proto, parse_module_list(outcome.stdout)
         except Exception:  # noqa: BLE001 -- one protocol's -L failing/hanging must not sink discovery
             return proto, []
@@ -349,6 +367,8 @@ def register(mcp, get_config) -> None:
         list. No targets, never offensive.
         """
         outcome = await execute(get_config(), protocol, [], ["-L"], offensive=False)
+        if getattr(outcome, "op_error", None) == DB_SCHEMA_MISMATCH:
+            return outcome.to_dict()       # not "no modules": nxc ran nothing, the note says why
         modules = parse_module_list(outcome.stdout)
         # `count` stays the number of RUNNABLE modules, so it keeps matching len(modules).
         if verbose:
@@ -376,6 +396,8 @@ def register(mcp, get_config) -> None:
         Case-insensitive substring match over module name and description.
         """
         outcome = await execute(get_config(), protocol, [], ["-L"], offensive=False)
+        if getattr(outcome, "op_error", None) == DB_SCHEMA_MISMATCH:
+            return outcome.to_dict()       # not "no match": nxc ran nothing, the note says why
         modules = [m for m in parse_module_list(outcome.stdout) if _matches(m, query)]
         # Retired modules are filtered on the query too: an unfiltered `removed` would answer
         # every search with the same 4-7 dead names, trading a bad result for pure noise.
@@ -436,6 +458,9 @@ def register(mcp, get_config) -> None:
         if not cfg.dry_run and protocol in cfg.protocols:
             try:
                 cats = await _module_categories(get_config, protocol)
+            except WorkspaceDBMismatch as exc:
+                # The module would stop the same way: say why, not the gate's "needs full".
+                return exc.outcome.to_dict()
             except Exception:  # noqa: BLE001 -- couldn't classify -> gate it
                 cats = {}
             # A module this protocol does not list used to fall through to the full-only gate:

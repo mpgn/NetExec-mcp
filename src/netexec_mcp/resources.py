@@ -70,7 +70,9 @@ returncode-0 call with nothing is `benign_empty`, not a failure. When `op_error`
 action such as exec or a SAM/LSA dump, which nxc skips for a login that is not admin, or
 `removed_option`: an option the installed nxc has retired and answers with `[REMOVED]`), retrying
 the same call will not succeed — change the credential/ticket (for `removed_option`, the tool
-or option), don't loop. `stdout` may be capped with
+or option), don't loop. `db_schema_mismatch` is different: nxc refused to run because its
+workspace database does not match it, nothing was sent, and every call of that protocol will
+fail until the user resolves it — tell the user nxc's message and stop. `stdout` may be capped with
 `stdout_truncated:true` when a structured field already carries the parsed data.
 A result lists `outcome_class`/`verdict` first and the raw `stdout` last; `resolved` is
 the command that ran, and fields left at their default (`op_error`, `timed_out`,
