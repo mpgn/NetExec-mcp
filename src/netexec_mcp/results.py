@@ -349,6 +349,41 @@ def removed_option_note(records, unparsed_lines: int) -> str | None:
             "and the same call will keep returning nothing: use what nxc names instead.")
 
 
+# nxc checks every table of the protocol's workspace DB against its own schema before any
+# network work (nxc/database.py reflect_table): on a mismatch it prints this line and three
+# more (`[-]`, no host prefix), then sys.exit() -> return code 0, nothing sent. Its wording is
+# stable since nxc 80d2f4b6 (2025-11-12).
+_SCHEMA_MISMATCH_RE = re.compile(
+    r"Schema mismatch detected for table '[^']+' in protocol '(?P<proto>[A-Za-z0-9_]+)'")
+DB_SCHEMA_MISMATCH = "db_schema_mismatch"
+
+
+def schema_mismatch_note(records, protocol: str) -> str | None:
+    """The note for a call nxc refused because the protocol's workspace DB does not match the
+    installed nxc (a DB created by an older nxc: nxc 3999b0ab added `shares.type`; or by a
+    newer one after a downgrade). nxc printed four `[-]` lines and stopped: nothing reached the
+    target, and every call of that protocol fails the same way until the user deals with the
+    DB, so the call is a terminal op_error, not the `ok` of an exit code 0. nxc's own message is
+    passed on as it is. Anchored so a host's output cannot trigger it: a `[-]` line without a
+    host prefix, nxc's exact sentence for THIS protocol, and no line of any host. None
+    otherwise (independent review, 2026-11-27)."""
+    if any(r.host for r in records):
+        return None
+    start = None
+    for i, r in enumerate(records):
+        m = _SCHEMA_MISMATCH_RE.fullmatch(r.message.strip())
+        if (r.marker == "-" and r.host is None and m
+                and m["proto"].lower() == (protocol or "").lower()):
+            start = i
+            break
+    if start is None:
+        return None
+    said = " ".join(r.message.strip() for r in records[start:] if r.marker == "-" and r.host is None)
+    return (f"STOP: nxc refused to run, nothing was sent to the target. nxc says: {said} "
+            f"Every {protocol} call will fail the same way until the user resolves it: tell the "
+            "user nxc's message and stop until they say it is resolved. Retrying will not help.")
+
+
 # Keys whose list value is NOT a dedicated-parser payload, so their presence must not trigger
 # the stdout cap: `command` is the argv, `records` is the cross-tool marker summary.
 _TRIM_EXCLUDE = frozenset({"command", "records"})

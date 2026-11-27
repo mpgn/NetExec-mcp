@@ -50,6 +50,7 @@ from .guardrails import (
     write_audit,
 )
 from .results import (
+    DB_SCHEMA_MISMATCH,
     StatusRecord,
     admin_only_flags,
     admin_skip_note,
@@ -57,6 +58,7 @@ from .results import (
     count_unmarked_lines,
     parse_markers,
     removed_option_note,
+    schema_mismatch_note,
 )
 
 # Matches CSI / SGR escape sequences such as the colour codes nxc emits.
@@ -739,6 +741,11 @@ async def execute(
     verdict, outcome_class, op_error, op_error_note = build_verdict(
         records, result.returncode, unparsed_lines, result.stderr
     )
+    # nxc refused to open a workspace DB that does not match it and ran nothing (exit code 0):
+    # terminal for the whole protocol until the user resolves it. Takes precedence over the rest.
+    schema_note = schema_mismatch_note(records, protocol)
+    if schema_note:
+        op_error, op_error_note, outcome_class = DB_SCHEMA_MISMATCH, schema_note, "op_error"
     # An admin-only action the login is not admin for: nxc skipped it silently, so a plain
     # "success" would read as if it had run. Terminal like any op_error; the call stays a
     # success only where some host was admin and ran it.
